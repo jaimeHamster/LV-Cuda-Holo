@@ -242,6 +242,100 @@ void Make3DTransform_CSG(float* h_KernelRE, float* h_KernelIm,
 }
 
 
+void Propagate3Dz_CSG(float* h_KernelRE, float* h_KernelIm,
+	float* h_bfpRe, float* h_bfpIm,
+	float* h_ImgOutRe, float* h_ImgOutIm,
+	float* zscale, int* arraySize) {
+
+	//Extract the size of the 2D and 3D arrays, and their respect allocation sizes
+	int row = arraySize[0];
+	int column = arraySize[1];
+	int zrange = arraySize[2];
+	int numElements = row*column;
+	int size3Darray = row*column*zrange;
+
+
+	//transfer data from h_KernelRe and Imaginary to C++ pointer
+	// As far as I know the only intelligent way to do this without going insane is to toss it into a FOR loop	
+	cufftComplex *h_Kernel;
+	h_Kernel = new cufftComplex[numElements]; // reserves memory for kernel
+
+	for (int i = 0; i < numElements; i++) {
+		h_Kernel[i].x = h_KernelRE[i];
+		h_Kernel[i].y = h_KernelIm[i];
+	}
+
+	//transfer BFP into complex c++ notation
+	cufftComplex *h_bfpIn;
+	h_bfpIn = new cufftComplex[numElements]; // reserves memory for kernel
+
+	for (int i = 0; i < numElements; i++) {
+		h_bfpIn[i].x = h_bfpRe[i];
+		h_bfpIn[i].y = h_bfpIm[i];
+	}
+
+
+	//transfer data from host memory to GPU 
+	cufftComplex *d_Kernel;
+	size_t memsize = numElements * sizeof(cufftComplex);
+	cudaMalloc((void**)&d_Kernel, memsize);
+	cudaMemcpy(d_Kernel, h_Kernel, memsize, cudaMemcpyHostToDevice);
+
+	cufftComplex *d_bfpIn;
+	cudaMalloc((void**)&d_bfpIn, memsize);
+	cudaMemcpy(d_bfpIn, h_bfpIn, memsize, cudaMemcpyHostToDevice);
+
+	float *d_zscale;
+	size_t memzsize = zrange * sizeof(float);
+	cudaMalloc((void**)&d_zscale, memzsize);
+	cudaMemcpy(d_zscale, zscale, memzsize, cudaMemcpyHostToDevice);
+
+	//preallocate space for 3D array, this will be a bit costly but lets go ahead with it
+	cufftComplex *d_3DKernel;
+	size_t mem3dsize = size3Darray * sizeof(cufftComplex);
+	cudaMalloc((void**)&d_3DKernel, mem3dsize);
+	//cudaMemset(d_3DKernel, 0, mem3dsize);
+
+	//Execute Kernel
+	Create3DTransferFunction << <32, 256 >> > (d_3DKernel, d_Kernel, d_bfpIn, d_zscale, size3Darray, numElements);
+
+	////////
+	// FFT goes here
+	////////
+
+
+
+
+	////////
+	// FFT ends
+	///////
+
+
+
+	//Copy device memory to host
+	cufftComplex *h_3DKernel;
+	h_3DKernel = new cufftComplex[size3Darray];
+	cudaMemcpy(h_3DKernel, d_3DKernel, mem3dsize, cudaMemcpyDeviceToHost);
+
+	//deallocate CUDA memory
+	cudaFree(d_bfpIn);
+	cudaFree(d_Kernel);
+	cudaFree(d_3DKernel);
+	cudaFree(d_zscale);
+
+	//transfer the complex2d array back as a processed individual re and imaginary 2d arrays
+	// i think it is prudent that I allocate the 2D space in the dll program
+	for (int i = 0; i < size3Darray; i++) {
+		h_ImgOutRe[i] = h_3DKernel[i].x;
+		h_ImgOutIm[i] = h_3DKernel[i].y;
+	}
+
+	//deallocate Host memory
+	delete[] h_Kernel;
+	delete[] h_3DKernel;
+
+}
+
 
 
 
@@ -439,15 +533,3 @@ there should be a way to reinit the gpu:
 
 */
 
-
-
-
-
-//Other deprecated shit
-/*
-#if defined(DLL_PROJECT)
-#define DLLAPI __declspec(dllexport)
-#else
-#define DLLAPI __declspec(dllimport)
-#endif
-*/
