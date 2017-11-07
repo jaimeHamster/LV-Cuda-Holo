@@ -16,7 +16,6 @@ in the VC++ directories:
 
 ////////////////////////
 CUDA/C/C++ directories:
-ghjgjgh
 	./
 	../../common/inc
 	$(CudaToolkitDir)/include
@@ -24,6 +23,7 @@ ghjgjgh
 ////////////////////////////////
 Linker/General include libraries:
 	cudart.lib
+	cufft.lib
 
 //changed the target machine platform from 32 to 64 bit
 */
@@ -299,13 +299,65 @@ void Propagate3Dz_CSG(float* h_KernelRE, float* h_KernelIm,
 	//Execute Kernel
 	Create3DTransferFunction << <32, 256 >> > (d_3DKernel, d_Kernel, d_bfpIn, d_zscale, size3Darray, numElements);
 
-	////////
-	// FFT goes here
-	////////
+
+	/////////////////////////////////////////////////////////////////////////////////////////
+	///// Prepare batch 2D FFT plan, const declaration
+	/////////////////////////////////////////////////////////////////////////////////////////
+	/* Create a batched 2D plan, or batch FFT , need to declare when each image begins! */
+	int istride = 1; //means every element is used in the computation
+	int ostride = 1; //means every element used in the computatio is output
+	int idist = row*column;
+	int odist = row*column;
+	int inembed[] = { row,column };
+	int onembed[] = { row,column };
+	const int NRANK = 2;
+	int n[NRANK] = { row,column };
+	int BATCH = zrange;
 
 
+	cufftHandle BatchFFTPlan;
+
+	if (cufftPlanMany(&BatchFFTPlan, NRANK, n,
+		inembed, istride, idist,// *inembed, istride, idist 
+		onembed, ostride, odist,// *onembed, ostride, odist 
+		CUFFT_C2C, BATCH) != CUFFT_SUCCESS)
+	{
+		fprintf(stderr, "CUFFT Error: Unable to create plan\n");
+		return;
+	}
 
 
+	/* ////////// Execute the transform out-of-place */
+	cufftComplex *d_3Dimg;
+	cudaMalloc((void**)&d_3Dimg, mem3dsize);
+	
+	if (cufftExecC2C(BatchFFTPlan, d_3DKernel, d_3Dimg, CUFFT_FORWARD) != CUFFT_SUCCESS) {
+		fprintf(stderr, "CUFFT Error: Failed to execute plan\n");
+		return;
+	}
+
+
+	/* //////// Execute the transform in-place
+	if (cufftExecC2C(BatchFFTPlan, d_3DKernel, d_3DKernel, CUFFT_FORWARD) != CUFFT_SUCCESS) {
+		fprintf(stderr, "CUFFT Error: Failed to execute plan\n");
+		return;
+	}*/
+
+
+	if (cudaDeviceSynchronize() != cudaSuccess) {
+		fprintf(stderr, "Cuda error: Failed to synchronize\n");
+		return;
+	} //However, unlike a normal sequential program on your host (The CPU) will continue to execute the next lines of code in your program.
+	//cudaDeviceSynchronize makes the host (The CPU) wait until the device (The GPU) have finished executing ALL the threads you have started,
+	//and thus your program will continue as if it was a normal sequential program.
+
+	//free data
+	cufftDestroy(BatchFFTPlan);
+	//cudaFree(idata);
+	//cudaFree(odata);
+
+
+	
 	////////
 	// FFT ends
 	///////
@@ -313,26 +365,27 @@ void Propagate3Dz_CSG(float* h_KernelRE, float* h_KernelIm,
 
 
 	//Copy device memory to host
-	cufftComplex *h_3DKernel;
-	h_3DKernel = new cufftComplex[size3Darray];
-	cudaMemcpy(h_3DKernel, d_3DKernel, mem3dsize, cudaMemcpyDeviceToHost);
+	cufftComplex *h_3Dimg;
+	h_3Dimg = new cufftComplex[size3Darray];
+	cudaMemcpy(h_3Dimg, d_3Dimg, mem3dsize, cudaMemcpyDeviceToHost);
 
 	//deallocate CUDA memory
 	cudaFree(d_bfpIn);
 	cudaFree(d_Kernel);
 	cudaFree(d_3DKernel);
 	cudaFree(d_zscale);
+	cudaFree(d_3Dimg);
 
 	//transfer the complex2d array back as a processed individual re and imaginary 2d arrays
 	// i think it is prudent that I allocate the 2D space in the dll program
 	for (int i = 0; i < size3Darray; i++) {
-		h_ImgOutRe[i] = h_3DKernel[i].x;
-		h_ImgOutIm[i] = h_3DKernel[i].y;
+		h_ImgOutRe[i] = h_3Dimg[i].x;
+		h_ImgOutIm[i] = h_3Dimg[i].y;
 	}
 
 	//deallocate Host memory
 	delete[] h_Kernel;
-	delete[] h_3DKernel;
+	delete[] h_3Dimg;
 
 }
 
@@ -411,7 +464,7 @@ void scaleArrayGPU_CSG(float* h_KernelRE, float* h_KernelIm, float* h_KernelModR
 	//Extract the size of the 2D and 3D arrays, and their respect allocation sizes
 	int row = arraySize[0];
 	int column = arraySize[1];
-	int zrange = arraySize[2];
+//	int zrange = arraySize[2];
 	int numElements = row*column;
 	//int size3Darray = row*column*zrange;
 
