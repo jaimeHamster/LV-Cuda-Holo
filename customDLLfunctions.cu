@@ -16,7 +16,7 @@ in the VC++ directories:
 
 ////////////////////////
 CUDA/C/C++ directories:
-
+ghjgjgh
 	./
 	../../common/inc
 	$(CudaToolkitDir)/include
