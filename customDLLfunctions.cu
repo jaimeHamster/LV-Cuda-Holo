@@ -23,7 +23,6 @@ CUDA/C/C++ directories:
 ////////////////////////////////
 Linker/General include libraries:
 	cudart.lib
-	cufft.lib
 
 //changed the target machine platform from 32 to 64 bit
 */
@@ -297,7 +296,7 @@ void Propagate3Dz_CSG(float* h_KernelRE, float* h_KernelIm,
 	//cudaMemset(d_3DKernel, 0, mem3dsize);
 
 	//Execute Kernel
-	Create3DTransferFunction << <32, 256 >> > (d_3DKernel, d_Kernel, d_bfpIn, d_zscale, size3Darray, numElements);
+	Create3DTransferFunction <<<32, 256 >> > (d_3DKernel, d_Kernel, d_bfpIn, d_zscale, size3Darray, numElements);
 
 
 	/////////////////////////////////////////////////////////////////////////////////////////
@@ -326,12 +325,11 @@ void Propagate3Dz_CSG(float* h_KernelRE, float* h_KernelIm,
 		return;
 	}
 
-
 	/* ////////// Execute the transform out-of-place */
 	cufftComplex *d_3Dimg;
 	cudaMalloc((void**)&d_3Dimg, mem3dsize);
 	
-	if (cufftExecC2C(BatchFFTPlan, d_3DKernel, d_3Dimg, CUFFT_FORWARD) != CUFFT_SUCCESS) {
+	if (cufftExecC2C(BatchFFTPlan, d_3DKernel, d_3Dimg, CUFFT_INVERSE) != CUFFT_SUCCESS) {
 		fprintf(stderr, "CUFFT Error: Failed to execute plan\n");
 		return;
 	}
@@ -344,10 +342,13 @@ void Propagate3Dz_CSG(float* h_KernelRE, float* h_KernelIm,
 	}*/
 
 
-	if (cudaDeviceSynchronize() != cudaSuccess) {
+	/*if (cudaDeviceSynchronize() != cudaSuccess) {
 		fprintf(stderr, "Cuda error: Failed to synchronize\n");
 		return;
-	} //However, unlike a normal sequential program on your host (The CPU) will continue to execute the next lines of code in your program.
+	} */
+	
+	
+	//However, unlike a normal sequential program on your host (The CPU) will continue to execute the next lines of code in your program.
 	//cudaDeviceSynchronize makes the host (The CPU) wait until the device (The GPU) have finished executing ALL the threads you have started,
 	//and thus your program will continue as if it was a normal sequential program.
 
