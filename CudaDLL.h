@@ -40,6 +40,11 @@ __declspec(dllexport) void __cdecl generate3DKernel_CSG(float* h_KernelRE, float
 	float* h_KernelModRe, float* h_KernelModIm,
 	float* zscale, int* arraySize);
 
+__declspec(dllexport) void __cdecl BottleNeck3DTransform_CSG(float* h_KernelRE, float* h_KernelIm,
+	float* h_bfpRe, float* h_bfpIm,
+	float* h_KernelModRe, float* h_KernelModIm,
+	float* zscale, int* arraySize);
+
 __declspec(dllexport) void __cdecl Make3DTransform_CSG(float* h_KernelRE, float* h_KernelIm,
 	float* h_bfpRe, float* h_bfpIm,
 	float* h_KernelModRe, float* h_KernelModIm,

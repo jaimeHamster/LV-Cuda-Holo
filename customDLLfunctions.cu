@@ -84,7 +84,7 @@ __global__ void ComplexScale2(cufftComplex* a, int size, float scale)
 //could be some form of slow down in the code if it is done with integer division / modulo operations
 //although it seems it is the only easy way to keep the threads parallelizable
 
-__global__ void Create3DKernel(cufftComplex* KernelOut, cufftComplex* KernelIn, float* zrange, int size, int imgsize)
+__global__ void Create3DKernel(cufftComplex* KernelOut, cufftComplex* KernelIn, float* zrange, int size, int imgsize, int zsize)
 {
 	const int numThreads = blockDim.x * gridDim.x;
 	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
@@ -92,10 +92,8 @@ __global__ void Create3DKernel(cufftComplex* KernelOut, cufftComplex* KernelIn, 
 	//its imperative that operations are performed on the individual elements,can not appyling the scaling simultaneously .x/.y
 	for (int i = threadID; i < size; i += numThreads)
 	{
-		int j = i / imgsize;
-		int k = i % imgsize;
-		KernelOut[i].x = zrange[j]*KernelIn[k].x;
-		KernelOut[i].y = zrange[j]*KernelIn[k].y;
+		KernelOut[i].x = zrange[i%zsize]*KernelIn[i%imgsize].x;
+		KernelOut[i].y = zrange[i%zsize]*KernelIn[i%imgsize].y;
 	}
 
 }
@@ -124,7 +122,7 @@ __global__ void Create3DKernelPhaseMultiply(cufftComplex* KernelOut, cufftComple
 ////////////////////////////////////////////////////////////////////////
 
 //Need to multiply in phase land and then convert back into .re and .im
-__global__ void Create3DTransferFunction(cufftComplex* KernelOut, cufftComplex* KernelIn, cufftComplex* bfpIn, float* zscale, int size, int imgsize)
+__global__ void Create3DTransferFunction(cufftComplex* KernelOut, cufftComplex* KernelIn, cufftComplex* bfpIn, float* zscale, int size, int imgsize, int zsize)
 {
 	const int numThreads = blockDim.x * gridDim.x;
 	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
@@ -132,7 +130,7 @@ __global__ void Create3DTransferFunction(cufftComplex* KernelOut, cufftComplex* 
 	//additional counters
 	for (int i = threadID ; i < size; i += numThreads)
 	{
-		int j = i / imgsize;
+		int j = i / imgsize; //doing modulo zsize gives weird results!
 		int k = i % imgsize;
 		float mag = cuCabsf(KernelIn[k]);
 		float phase = cuPhase(KernelIn[k])*zscale[j]; //multiply here already , absorb the 2*pi in there
@@ -153,11 +151,125 @@ __global__ void Create3DTransferFunction(cufftComplex* KernelOut, cufftComplex* 
 }
 
 
+__global__ void TransferFunction(cufftComplex* KernelOut, cufftComplex* KernelIn, cufftComplex* bfpIn, float* zscale, int size, int imgsize, int zsize)
+{
+	const int numThreads = blockDim.x * gridDim.x;
+	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
+
+	//additional counters
+	for (int i = threadID; i < size; i += numThreads)
+	{
+		int j = i / imgsize; //doing modulo zsize gives weird results!
+		int k = i % imgsize;
+		float mag = cuCabsf(KernelIn[k]);
+		float phase = cuPhase(KernelIn[k])*zscale[j]; //multiply here already , absorb the 2*pi in there
+
+		cufftComplex tempHolder;
+		//converting from polar to re/im coordinate system
+		tempHolder.x = mag*cosf(phase);
+		tempHolder.y = mag*sinf(phase);
+
+		//performing matrix multiplication on an index basis between bfpIn and Kernel
+		cufftComplex tempMult;
+		tempMult = cuCmulf(tempHolder, bfpIn[k]);
+
+		//add the result of above to the 3D array
+		KernelOut[i].x = tempMult.x;
+		KernelOut[i].y = tempMult.y;
+	}
+}
+
 
 //////////////////////////////////////////////////////////////////
 ////// Functions to be called via the DLL  go HERE
 /////////////////////////////////////////////////////////////////
 
+
+void BottleNeck3DTransform_CSG(float* h_KernelRE, float* h_KernelIm,
+	float* h_bfpRe, float* h_bfpIm,
+	float* h_KernelModRe, float* h_KernelModIm,
+	float* zscale, int* arraySize) {
+
+	//Extract the size of the 2D and 3D arrays, and their respect allocation sizes
+	int row = arraySize[0];
+	int column = arraySize[1];
+	int zrange = arraySize[2];
+	int numElements = row*column;
+	int size3Darray = row*column*zrange;
+
+	const int BlockSize = 512;
+	int GridSize = 32 * 16* 4;// (size3Darray + BlockSize - 1) / BlockSize;
+
+	//transfer data from h_KernelRe and Imaginary to C++ pointer
+	// As far as I know the only intelligent way to do this without going insane is to toss it into a FOR loop	
+	cufftComplex *h_Kernel;
+	h_Kernel = new cufftComplex[numElements]; // reserves memory for kernel
+
+	
+	for (int i = 0; i < numElements; i++) {
+		h_Kernel[i].x = h_KernelRE[i];
+		h_Kernel[i].y = h_KernelIm[i];
+	}
+
+	//transfer BFP into complex c++ notation
+	cufftComplex *h_bfpIn;
+	h_bfpIn = new cufftComplex[numElements]; // reserves memory for kernel
+
+	for (int i = 0; i < numElements; i++) {
+		h_bfpIn[i].x = h_bfpRe[i];
+		h_bfpIn[i].y = h_bfpIm[i];
+	}
+	
+
+	//transfer data from host memory to GPU 
+	cufftComplex *d_Kernel;
+	size_t memsize = numElements * sizeof(cufftComplex);
+	cudaMalloc((void**)&d_Kernel, memsize);
+	cudaMemcpy(d_Kernel, h_Kernel, memsize, cudaMemcpyHostToDevice);
+
+	cufftComplex *d_bfpIn;
+	cudaMalloc((void**)&d_bfpIn, memsize);
+	cudaMemcpy(d_bfpIn, h_bfpIn, memsize, cudaMemcpyHostToDevice);
+
+	float *d_zscale;
+	size_t memzsize = zrange * sizeof(float);
+	cudaMalloc((void**)&d_zscale, memzsize);
+	cudaMemcpy(d_zscale, zscale, memzsize, cudaMemcpyHostToDevice);
+
+	//preallocate space for 3D array, this will be a bit costly but lets go ahead with it
+	cufftComplex *d_3DKernel;
+	size_t mem3dsize = size3Darray * sizeof(cufftComplex);
+	cudaMalloc((void**)&d_3DKernel, mem3dsize);
+	//cudaMemset(d_3DKernel, 0, mem3dsize);
+
+	//Execute Kernel
+	float alpha = 0.4;
+	ScaleArray<< <GridSize, BlockSize >> > (d_zscale, alpha, zrange);
+	//Create3DKernel <<<GridSize, BlockSize >> > (d_3DKernel, d_Kernel, d_zscale, size3Darray, numElements,zrange);
+
+	//Copy device memory to host
+	cufftComplex *h_3DKernel;
+	h_3DKernel = new cufftComplex[size3Darray];
+	cudaMemcpy(h_3DKernel, d_3DKernel, mem3dsize, cudaMemcpyDeviceToHost);
+
+	//deallocate CUDA memory
+	cudaFree(d_bfpIn);
+	cudaFree(d_Kernel);
+	cudaFree(d_3DKernel);
+	cudaFree(d_zscale);
+
+	//transfer the complex2d array back as a processed individual re and imaginary 2d arrays
+	// i think it is prudent that I allocate the 2D space in the dll program
+	for (int i = 0; i < size3Darray; i++) {
+		h_KernelModRe[i] = h_3DKernel[i].x;
+		h_KernelModIm[i] = h_3DKernel[i].y;
+	}
+
+	//deallocate Host memory
+	delete[] h_Kernel;
+	delete[] h_3DKernel;
+
+}
 
 void Make3DTransform_CSG(float* h_KernelRE, float* h_KernelIm,
 	float* h_bfpRe, float* h_bfpIm,
@@ -171,6 +283,8 @@ void Make3DTransform_CSG(float* h_KernelRE, float* h_KernelIm,
 	int numElements = row*column;
 	int size3Darray = row*column*zrange;
 
+	const int BlockSize = 512;
+	int GridSize = 32*16*4;
 
 	//transfer data from h_KernelRe and Imaginary to C++ pointer
 	// As far as I know the only intelligent way to do this without going insane is to toss it into a FOR loop	
@@ -214,7 +328,7 @@ void Make3DTransform_CSG(float* h_KernelRE, float* h_KernelIm,
 	//cudaMemset(d_3DKernel, 0, mem3dsize);
 
 	//Execute Kernel
-	Create3DTransferFunction <<<32, 256 >>> (d_3DKernel, d_Kernel, d_bfpIn, d_zscale, size3Darray, numElements);
+	Create3DTransferFunction <<<GridSize, BlockSize >>> (d_3DKernel, d_Kernel, d_bfpIn, d_zscale, size3Darray, numElements, zrange);
 
 	//Copy device memory to host
 	cufftComplex *h_3DKernel;
@@ -252,7 +366,9 @@ void Propagate3Dz_CSG(float* h_KernelRE, float* h_KernelIm,
 	int zrange = arraySize[2];
 	int numElements = row*column;
 	int size3Darray = row*column*zrange;
-
+	
+	const int BlockSize = 512;
+	int GridSize = 32*16*4;
 
 	//transfer data from h_KernelRe and Imaginary to C++ pointer
 	// As far as I know the only intelligent way to do this without going insane is to toss it into a FOR loop	
@@ -296,7 +412,7 @@ void Propagate3Dz_CSG(float* h_KernelRE, float* h_KernelIm,
 	//cudaMemset(d_3DKernel, 0, mem3dsize);
 
 	//Execute Kernel
-	Create3DTransferFunction <<<32, 256 >> > (d_3DKernel, d_Kernel, d_bfpIn, d_zscale, size3Darray, numElements);
+	Create3DTransferFunction <<<GridSize, BlockSize >>> (d_3DKernel, d_Kernel, d_bfpIn, d_zscale, size3Darray, numElements,zrange);
 
 
 	/////////////////////////////////////////////////////////////////////////////////////////
@@ -326,27 +442,27 @@ void Propagate3Dz_CSG(float* h_KernelRE, float* h_KernelIm,
 	}
 
 	/* ////////// Execute the transform out-of-place */
-	cufftComplex *d_3Dimg;
+	/*cufftComplex *d_3Dimg;
 	cudaMalloc((void**)&d_3Dimg, mem3dsize);
 	
 	if (cufftExecC2C(BatchFFTPlan, d_3DKernel, d_3Dimg, CUFFT_INVERSE) != CUFFT_SUCCESS) {
 		fprintf(stderr, "CUFFT Error: Failed to execute plan\n");
 		return;
 	}
+	*/
 
-
-	/* //////// Execute the transform in-place
-	if (cufftExecC2C(BatchFFTPlan, d_3DKernel, d_3DKernel, CUFFT_FORWARD) != CUFFT_SUCCESS) {
+	//////// Execute the transform in-place
+	if (cufftExecC2C(BatchFFTPlan, d_3DKernel, d_3DKernel, CUFFT_INVERSE) != CUFFT_SUCCESS) {
 		fprintf(stderr, "CUFFT Error: Failed to execute plan\n");
 		return;
-	}*/
+	}
 
 
 	/*if (cudaDeviceSynchronize() != cudaSuccess) {
 		fprintf(stderr, "Cuda error: Failed to synchronize\n");
 		return;
 	} */
-	
+
 	
 	//However, unlike a normal sequential program on your host (The CPU) will continue to execute the next lines of code in your program.
 	//cudaDeviceSynchronize makes the host (The CPU) wait until the device (The GPU) have finished executing ALL the threads you have started,
@@ -368,14 +484,14 @@ void Propagate3Dz_CSG(float* h_KernelRE, float* h_KernelIm,
 	//Copy device memory to host
 	cufftComplex *h_3Dimg;
 	h_3Dimg = new cufftComplex[size3Darray];
-	cudaMemcpy(h_3Dimg, d_3Dimg, mem3dsize, cudaMemcpyDeviceToHost);
+	cudaMemcpy(h_3Dimg, d_3DKernel, mem3dsize, cudaMemcpyDeviceToHost);
 
 	//deallocate CUDA memory
 	cudaFree(d_bfpIn);
 	cudaFree(d_Kernel);
 	cudaFree(d_3DKernel);
 	cudaFree(d_zscale);
-	cudaFree(d_3Dimg);
+	//cudaFree(d_3Dimg);
 
 	//transfer the complex2d array back as a processed individual re and imaginary 2d arrays
 	// i think it is prudent that I allocate the 2D space in the dll program
@@ -389,7 +505,7 @@ void Propagate3Dz_CSG(float* h_KernelRE, float* h_KernelIm,
 	delete[] h_3Dimg;
 
 }
-
+///// The main heavylifting seems to be the transfer of the 3D array if Im not mistaken
 
 
 
@@ -547,7 +663,7 @@ void generate3DKernel_CSG(float* h_KernelRE, float* h_KernelIm, float* h_KernelM
 	//cudaMemset(d_3DKernel, 0, mem3dsize);
 
 	//Execute Kernel
-	Create3DKernel << <32, 256 >> > (d_3DKernel, d_Kernel, d_zscale, size3Darray, numElements);
+	Create3DKernel << <32, 256 >> > (d_3DKernel, d_Kernel, d_zscale, size3Darray, numElements,zrange);
 
 	//Copy device memory to host
 	cufftComplex *h_3DKernel;
