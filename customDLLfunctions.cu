@@ -505,6 +505,370 @@ void Propagate3Dz_CSG(float* h_KernelRE, float* h_KernelIm,
 	delete[] h_3Dimg;
 
 }
+
+void Propagate3Dz_CSG(float* h_KernelRE, float* h_KernelIm,
+	float* h_bfpRe, float* h_bfpIm,
+	float* h_ImgOutRe, float* h_ImgOutIm,
+	float* zscale, int* arraySize) {
+
+	//Extract the size of the 2D and 3D arrays, and their respect allocation sizes
+	int row = arraySize[0];
+	int column = arraySize[1];
+	int zrange = arraySize[2];
+	int numElements = row*column;
+	int size3Darray = row*column*zrange;
+	
+	const int BlockSize = 512;
+	int GridSize = 32*16*4;
+
+	//transfer data from h_KernelRe and Imaginary to C++ pointer
+	// As far as I know the only intelligent way to do this without going insane is to toss it into a FOR loop	
+	cufftComplex *h_Kernel;
+	h_Kernel = new cufftComplex[numElements]; // reserves memory for kernel
+
+	for (int i = 0; i < numElements; i++) {
+		h_Kernel[i].x = h_KernelRE[i];
+		h_Kernel[i].y = h_KernelIm[i];
+	}
+
+	//transfer BFP into complex c++ notation
+	cufftComplex *h_bfpIn;
+	h_bfpIn = new cufftComplex[numElements]; // reserves memory for kernel
+
+	for (int i = 0; i < numElements; i++) {
+		h_bfpIn[i].x = h_bfpRe[i];
+		h_bfpIn[i].y = h_bfpIm[i];
+	}
+
+
+	//transfer data from host memory to GPU 
+	cufftComplex *d_Kernel;
+	size_t memsize = numElements * sizeof(cufftComplex);
+	cudaMalloc((void**)&d_Kernel, memsize);
+	cudaMemcpy(d_Kernel, h_Kernel, memsize, cudaMemcpyHostToDevice);
+
+	cufftComplex *d_bfpIn;
+	cudaMalloc((void**)&d_bfpIn, memsize);
+	cudaMemcpy(d_bfpIn, h_bfpIn, memsize, cudaMemcpyHostToDevice);
+
+	float *d_zscale;
+	size_t memzsize = zrange * sizeof(float);
+	cudaMalloc((void**)&d_zscale, memzsize);
+	cudaMemcpy(d_zscale, zscale, memzsize, cudaMemcpyHostToDevice);
+
+	//preallocate space for 3D array, this will be a bit costly but lets go ahead with it
+	cufftComplex *d_3DKernel;
+	size_t mem3dsize = size3Darray * sizeof(cufftComplex);
+	cudaMalloc((void**)&d_3DKernel, mem3dsize);
+	//cudaMemset(d_3DKernel, 0, mem3dsize);
+
+	//Execute Kernel
+	Create3DTransferFunction <<<GridSize, BlockSize >>> (d_3DKernel, d_Kernel, d_bfpIn, d_zscale, size3Darray, numElements,zrange);
+
+
+	/////////////////////////////////////////////////////////////////////////////////////////
+	///// Prepare batch 2D FFT plan, const declaration
+	/////////////////////////////////////////////////////////////////////////////////////////
+	/* Create a batched 2D plan, or batch FFT , need to declare when each image begins! */
+	int istride = 1; //means every element is used in the computation
+	int ostride = 1; //means every element used in the computatio is output
+	int idist = row*column;
+	int odist = row*column;
+	int inembed[] = { row,column };
+	int onembed[] = { row,column };
+	const int NRANK = 2;
+	int n[NRANK] = { row,column };
+	int BATCH = zrange;
+
+
+	cufftHandle BatchFFTPlan;
+
+	if (cufftPlanMany(&BatchFFTPlan, NRANK, n,
+		inembed, istride, idist,// *inembed, istride, idist 
+		onembed, ostride, odist,// *onembed, ostride, odist 
+		CUFFT_C2C, BATCH) != CUFFT_SUCCESS)
+	{
+		fprintf(stderr, "CUFFT Error: Unable to create plan\n");
+		return;
+	}
+
+	/* ////////// Execute the transform out-of-place */
+	/*cufftComplex *d_3Dimg;
+	cudaMalloc((void**)&d_3Dimg, mem3dsize);
+	
+	if (cufftExecC2C(BatchFFTPlan, d_3DKernel, d_3Dimg, CUFFT_INVERSE) != CUFFT_SUCCESS) {
+		fprintf(stderr, "CUFFT Error: Failed to execute plan\n");
+		return;
+	}
+	*/
+
+	//////// Execute the transform in-place
+	if (cufftExecC2C(BatchFFTPlan, d_3DKernel, d_3DKernel, CUFFT_INVERSE) != CUFFT_SUCCESS) {
+		fprintf(stderr, "CUFFT Error: Failed to execute plan\n");
+		return;
+	}
+
+
+	/*if (cudaDeviceSynchronize() != cudaSuccess) {
+		fprintf(stderr, "Cuda error: Failed to synchronize\n");
+		return;
+	} */
+
+	
+	//However, unlike a normal sequential program on your host (The CPU) will continue to execute the next lines of code in your program.
+	//cudaDeviceSynchronize makes the host (The CPU) wait until the device (The GPU) have finished executing ALL the threads you have started,
+	//and thus your program will continue as if it was a normal sequential program.
+
+	//free data
+	cufftDestroy(BatchFFTPlan);
+	//cudaFree(idata);
+	//cudaFree(odata);
+
+
+	
+	////////
+	// FFT ends
+	///////
+
+
+
+	//Copy device memory to host
+	cufftComplex *h_3Dimg;
+	h_3Dimg = new cufftComplex[size3Darray];
+	cudaMemcpy(h_3Dimg, d_3DKernel, mem3dsize, cudaMemcpyDeviceToHost);
+
+	//deallocate CUDA memory
+	cudaFree(d_bfpIn);
+	cudaFree(d_Kernel);
+	cudaFree(d_3DKernel);
+	cudaFree(d_zscale);
+	//cudaFree(d_3Dimg);
+
+	//transfer the complex2d array back as a processed individual re and imaginary 2d arrays
+	// i think it is prudent that I allocate the 2D space in the dll program
+	for (int i = 0; i < size3Darray; i++) {
+		h_ImgOutRe[i] = h_3Dimg[i].x;
+		h_ImgOutIm[i] = h_3Dimg[i].y;
+	}
+
+	//deallocate Host memory
+	delete[] h_Kernel;
+	delete[] h_3Dimg;
+
+}
+
+
+
+
+
+
+__device__ static __inline__ float cmagf(float x, float y)
+{
+	float v, w, t;
+	a = fabsf(x);
+	b = fabsf(y);
+	if (a > b) {
+		v = a;
+		w = b;
+	}
+	else {
+		v = b;
+		w = a;
+	}
+	t = w / v;
+	t = 1.0f + t * t;
+	t = v * sqrtf(t);
+	if ((v == 0.0f) || (v > 3.402823466e38f) || (w > 3.402823466e38f)) {
+		t = v + w;
+	}
+	return t;
+}
+
+__global__ void makeKernel(float* KernelPhase, int row, int column, float* ImgProperties) {
+	const int numThreads = blockDim.x * gridDim.x;
+	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
+	const float pixdxInv = ImgProperties[1]/ImgProperties[0]; // Magnification/pixSize
+	const float km = ImgProperties[2]/ImgProperties[3]; // nm / lambda
+		// need to think of the implications of altering the BFP .. this should effectively change the magnification
+	for (int i = threadID; i < row*column; i += numThreads){
+		int dx = i%row;
+		int dy = i%column;
+		float kdx = (dx / row - 0.5f) *pixdxInv;
+		float kdy = (dy / column - 0.5f)*pixdxInv;
+		float temp =km*km - kdx*kdx - kdy*kdy;
+		KernelPhase[i] = (temp >= 0) ? sqrtf(temp) : 0;
+	{
+}
+
+
+__global__ void ConvertCmplx2Polar(float* inRe, float* inIm, float* mag, float* phase, int size) {
+	const int numThreads = blockDim.x * gridDim.x;
+	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
+	for (int i = threadID; i < size; i += numThreads)
+	{
+		phase[i] = atan2f(inIm[i], inRe[i]);
+		mag[i] =cmagf(inIm[i], inRe[i]) ;
+	}
+}
+
+
+void PropagateZslices(float* h_bfpMag, float* h_bfpPhase,
+	float* h_ImgOutRe, float* h_ImgOutIm,
+	float* zscale, int* arraySize) {
+
+	//Extract the size of the 2D and 3D arrays, and their respect allocation sizes
+	int row = arraySize[0];
+	int column = arraySize[1];
+	int zrange = arraySize[2];
+	int numElements = row*column;
+	int size3Darray = row*column*zrange;
+
+	const int BlockSize = 512;
+	int GridSize = 32 * 16 * 4;
+
+	
+	for (int i = 0; i < numElements; i++) {
+		h_bfpIn[i].x = h_bfpRe[i];
+		h_bfpIn[i].y = h_bfpIm[i];
+	}
+
+	//////////////////////////////////////////////////
+	//transfer data from host memory to GPU 
+	//// idea is to avoid an expensive c++ allocation and copying values into a complex array format
+	////// Almost thinking of calculating the whole Kernel in the device to avoid 2 device transfers!
+
+	float* d_KernelRe;
+	float* d_KernelIm;
+	float* d_bfpRe;
+	float* d_bfpIm;
+
+	size_t mem2darray = numElements*sizeof(float);
+	cudaMalloc((void**)&d_KernelRe, mem2darray);
+	cudaMalloc((void**)&d_KernelIm, mem2darray);
+	cudaMalloc((void**)&d_bfpRe, mem2darray);
+	cudaMalloc((void**)&d_bfpIm, mem2darray);
+
+	cudaMemcpy(d_KernelRe, h_Kernel, mem2darray, cudaMemcpyHostToDevice);
+	cudaMemcpy(d_KernelIm, h_Kernel, mem2darray, cudaMemcpyHostToDevice);
+	cudaMemcpy(d_bfpRe, h_Kernel, mem2darray, cudaMemcpyHostToDevice);
+	cudaMemcpy(d_bfpIm, h_Kernel, mem2darray, cudaMemcpyHostToDevice);
+	
+	
+	cufftComplex *d_Kernel;
+	size_t memsize = numElements * sizeof(cufftComplex);
+	cudaMalloc((void**)&d_Kernel, memsize);
+	cudaMemcpy(d_Kernel, h_Kernel, memsize, cudaMemcpyHostToDevice);
+
+	cufftComplex *d_bfpIn;
+	cudaMalloc((void**)&d_bfpIn, memsize);
+	cudaMemcpy(d_bfpIn, h_bfpIn, memsize, cudaMemcpyHostToDevice);
+
+	float *d_zscale;
+	size_t memzsize = zrange * sizeof(float);
+	cudaMalloc((void**)&d_zscale, memzsize);
+	cudaMemcpy(d_zscale, zscale, memzsize, cudaMemcpyHostToDevice);
+
+	//preallocate space for 3D array, this will be a bit costly but lets go ahead with it
+	cufftComplex *d_3DKernel;
+	size_t mem3dsize = size3Darray * sizeof(cufftComplex);
+	cudaMalloc((void**)&d_3DKernel, mem3dsize);
+	//cudaMemset(d_3DKernel, 0, mem3dsize);
+
+	//Execute Kernel
+	Create3DTransferFunction << <GridSize, BlockSize >> > (d_3DKernel, d_Kernel, d_bfpIn, d_zscale, size3Darray, numElements, zrange);
+
+
+	/////////////////////////////////////////////////////////////////////////////////////////
+	///// Prepare batch 2D FFT plan, const declaration
+	/////////////////////////////////////////////////////////////////////////////////////////
+	/* Create a batched 2D plan, or batch FFT , need to declare when each image begins! */
+	int istride = 1; //means every element is used in the computation
+	int ostride = 1; //means every element used in the computatio is output
+	int idist = row*column;
+	int odist = row*column;
+	int inembed[] = { row,column };
+	int onembed[] = { row,column };
+	const int NRANK = 2;
+	int n[NRANK] = { row,column };
+	int BATCH = zrange;
+
+
+	cufftHandle BatchFFTPlan;
+
+	if (cufftPlanMany(&BatchFFTPlan, NRANK, n,
+		inembed, istride, idist,// *inembed, istride, idist 
+		onembed, ostride, odist,// *onembed, ostride, odist 
+		CUFFT_C2C, BATCH) != CUFFT_SUCCESS)
+	{
+		fprintf(stderr, "CUFFT Error: Unable to create plan\n");
+		return;
+	}
+
+	/* ////////// Execute the transform out-of-place */
+	/*cufftComplex *d_3Dimg;
+	cudaMalloc((void**)&d_3Dimg, mem3dsize);
+
+	if (cufftExecC2C(BatchFFTPlan, d_3DKernel, d_3Dimg, CUFFT_INVERSE) != CUFFT_SUCCESS) {
+	fprintf(stderr, "CUFFT Error: Failed to execute plan\n");
+	return;
+	}
+	*/
+
+	//////// Execute the transform in-place
+	if (cufftExecC2C(BatchFFTPlan, d_3DKernel, d_3DKernel, CUFFT_INVERSE) != CUFFT_SUCCESS) {
+		fprintf(stderr, "CUFFT Error: Failed to execute plan\n");
+		return;
+	}
+
+
+	/*if (cudaDeviceSynchronize() != cudaSuccess) {
+	fprintf(stderr, "Cuda error: Failed to synchronize\n");
+	return;
+	} */
+
+
+	//However, unlike a normal sequential program on your host (The CPU) will continue to execute the next lines of code in your program.
+	//cudaDeviceSynchronize makes the host (The CPU) wait until the device (The GPU) have finished executing ALL the threads you have started,
+	//and thus your program will continue as if it was a normal sequential program.
+
+	//free data
+	cufftDestroy(BatchFFTPlan);
+	//cudaFree(idata);
+	//cudaFree(odata);
+
+
+
+	////////
+	// FFT ends
+	///////
+
+
+
+	//Copy device memory to host
+	cufftComplex *h_3Dimg;
+	h_3Dimg = new cufftComplex[size3Darray];
+	cudaMemcpy(h_3Dimg, d_3DKernel, mem3dsize, cudaMemcpyDeviceToHost);
+
+	//deallocate CUDA memory
+	cudaFree(d_bfpIn);
+	cudaFree(d_Kernel);
+	cudaFree(d_3DKernel);
+	cudaFree(d_zscale);
+	//cudaFree(d_3Dimg);
+
+	//transfer the complex2d array back as a processed individual re and imaginary 2d arrays
+	// i think it is prudent that I allocate the 2D space in the dll program
+	for (int i = 0; i < size3Darray; i++) {
+		h_ImgOutRe[i] = h_3Dimg[i].x;
+		h_ImgOutIm[i] = h_3Dimg[i].y;
+	}
+
+	//deallocate Host memory
+	delete[] h_Kernel;
+	delete[] h_3Dimg;
+
+}
+
 ///// The main heavylifting seems to be the transfer of the 3D array if Im not mistaken
 
 
