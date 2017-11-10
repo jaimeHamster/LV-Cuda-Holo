@@ -46,7 +46,27 @@ __host__ __device__ float cuPhase(cufftComplex a) {
 	return phaseOut;
 }
 
-
+__device__ static __inline__ float cmagf(float x, float y)
+{
+	float a, b, v, w, t;
+	a = fabsf(x);
+	b = fabsf(y);
+	if (a > b) {
+		v = a;
+		w = b;
+	}
+	else {
+		v = b;
+		w = a;
+	}
+	t = w / v;
+	t = 1.0f + t * t;
+	t = v * sqrtf(t);
+	if ((v == 0.0f) || (v > 3.402823466e38f) || (w > 3.402823466e38f)) {
+		t = v + w;
+	}
+	return t;
+}
 
 ///////////////////////////////////////////////////////////////
 ////// CUDA Kernels go Here, which are then called in the GPU DLL FUnctions
@@ -79,6 +99,17 @@ __global__ void ComplexScale2(cufftComplex* a, int size, float scale)
 	}
 	
 }
+
+__global__ void ConvertCmplx2Polar(float* inRe, float* inIm, float* mag, float* phase, int size) {
+	const int numThreads = blockDim.x * gridDim.x;
+	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
+	for (int i = threadID; i < size; i += numThreads)
+	{
+		phase[i] = atan2f(inIm[i], inRe[i]);
+		mag[i] = cmagf(inIm[i], inRe[i]);
+	}
+}
+
 
 // Create a 3D complex array from multiplication of a 2D array by 1D array
 //could be some form of slow down in the code if it is done with integer division / modulo operations

@@ -9,33 +9,8 @@
 ///////////// Device specific operations
 //////////////////////////
 
-__device__ static __inline__ float cmagf(float x, float y)
-{
-	float a,b,v, w, t;
-	a = fabsf(x);
-	b = fabsf(y);
-	if (a > b) {
-		v = a;
-		w = b;
-	}
-	else {
-		v = b;
-		w = a;
-	}
-	t = w / v;
-	t = 1.0f + t * t;
-	t = v * sqrtf(t);
-	if ((v == 0.0f) || (v > 3.402823466e38f) || (w > 3.402823466e38f)) {
-		t = v + w;
-	}
-	return t;
-}
 
-__host__ __device__ float cuPhase(cufftComplex a) {
-	float phaseOut;
-	phaseOut = atan2f(a.y, a.x);
-	return phaseOut;
-}
+
 
 
 
@@ -59,15 +34,6 @@ __global__ void makeKernel(float* KernelPhase, int row, int column, float* ImgPr
 }
 
 
-		__global__ void ConvertCmplx2Polar(float* inRe, float* inIm, float* mag, float* phase, int size) {
-			const int numThreads = blockDim.x * gridDim.x;
-			const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
-			for (int i = threadID; i < size; i += numThreads)
-			{
-				phase[i] = atan2f(inIm[i], inRe[i]);
-				mag[i] = cmagf(inIm[i], inRe[i]);
-			}
-		}
 
 
 		__global__ void TransferFunction(cufftComplex* img3Darray, float* bfpMag, float* bfpPhase, float* kPhase, float* zDist, int totalsize, int imgsize)
@@ -161,10 +127,10 @@ __global__ void makeKernel(float* KernelPhase, int row, int column, float* ImgPr
 
 
 			//preallocate space for 3D array, this will be a bit costly but lets go ahead with it
-			cufftComplex *d_3DiFFt;
+			cufftComplex *d_3DiFFT;
 			int size3Darray = row*column*zrange;
 			size_t mem3dsize = size3Darray * sizeof(cufftComplex);
-			cudaMalloc((void**)&d_3DiFFt, mem3dsize);
+			cudaMalloc((void**)&d_3DiFFT, mem3dsize);
 
 			//given that LV does not accept the cmplx number array format as any I/O I need to transform the cmplx 3D array into re and im. 
 
