@@ -175,8 +175,8 @@ __global__ void makeKernel(float* KernelPhase, int row, int column, float* ImgPr
 			cudaMalloc((void**)&d_ImgOutIm, mem3dfloat);
 
 			//Execute Kernels
-			makeKernel << <GridSize, BlockSize >> >(d_KernelPhase, row, columnm, d_imgProperties, MagXReScale);
-			TransferFunction << <GridSize, BlockSize >> > (d_3DKernel, d_Kernel, d_bfpIn, d_zscale, size3Darray, numElements, zrange);
+			makeKernel << <GridSize, BlockSize >> >(d_kernelPhase, row, column, d_imgProperties, MagXReScale);
+			TransferFunction << <GridSize, BlockSize >> > (d_3DiFFT, d_bfpMag , d_bfpPhase, d_kernelPhase, d_zscale, size3Darray, numElements);
 
 			/////////////////////////////////////////////////////////////////////////////////////////
 			///// Prepare batch 2D FFT plan, const declaration
@@ -205,7 +205,7 @@ __global__ void makeKernel(float* KernelPhase, int row, int column, float* ImgPr
 
 
 			//////// Execute the transform in-place
-			if (cufftExecC2C(BatchFFTPlan, d_3DKernel, d_3DKernel, CUFFT_INVERSE) != CUFFT_SUCCESS) {
+			if (cufftExecC2C(BatchFFTPlan, d_3DiFFT, d_3DiFFT, CUFFT_INVERSE) != CUFFT_SUCCESS) {
 				fprintf(stderr, "CUFFT Error: Failed to execute plan\n");
 				return;
 			}
@@ -240,10 +240,15 @@ __global__ void makeKernel(float* KernelPhase, int row, int column, float* ImgPr
 
 
 			//deallocate CUDA memory
-			cudaFree(d_bfpIn);
-			cudaFree(d_Kernel);
-			cudaFree(d_3DKernel);
+			
+			cudaFree(d_bfpMag);
+			cudaFree(d_bfpPhase);
+			cudaFree(d_kernelPhase);
+			cudaFree(d_3DiFFT);
 			cudaFree(d_zscale);
+			cudaFree(d_imgProperties);
+			cudaFree(d_ImgOutRe);
+			cudaFree(d_ImgOutIm);
 
 		}
 			
