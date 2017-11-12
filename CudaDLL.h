@@ -36,6 +36,10 @@ __declspec(dllexport) void __cdecl PropagateZslices(float* h_bfpMag, float* h_bf
 		float* h_ImgOutRe, float* h_ImgOutIm,
 		float* zscale, int* arraySize, float* imgProperties);
 
+__declspec(dllexport) void __cdecl TestMakeKernel3D(float* h_bfpMag, float* h_bfpPhase,
+	float* h_ImgOutRe, float* h_ImgOutIm,
+	float* zscale, int* arraySize, float* imgProperties);
+
 
 // non-optimised version of the processing
 __declspec(dllexport) void __cdecl Propagate3Dz_CSG(float* h_KernelRE, float* h_KernelIm,
