@@ -30,7 +30,9 @@ extern "C" {
 //Main functions that operate on holograms
 /////////////
 
-
+__declspec(dllexport) void __cdecl PropagateZ_ReturnMagnitude(float* h_bfpMag, float* h_bfpPhase,
+		float* h_ImgOutMag,
+		float* zscale, int* arraySize, float* imgProperties);
 
 __declspec(dllexport) void __cdecl PropagateZslices(float* h_bfpMag, float* h_bfpPhase,
 		float* h_ImgOutRe, float* h_ImgOutIm,
