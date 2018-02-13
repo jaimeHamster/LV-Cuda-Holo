@@ -51,7 +51,7 @@ __device__ static __inline__ float cmagf2(float x, float y)
 
 
 ////////////////////////////////
-///////////////////////// GPU Kernels
+////////GPU Kernels
 //////////////////////////////
 
 //this kernel requires fftshift
@@ -89,9 +89,6 @@ __global__ void makeKernel(float* KernelPhase, int row, int column, float* ImgPr
 __global__ void makeKernel_nonefftshift(float* KernelPhase, int row, int column, float* ImgProperties, float MagXscaling) {
 	const int numThreads = blockDim.x * gridDim.x;
 	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
-	
-
-
 	float MagX = ImgProperties[1];
 	float pixSize = ImgProperties[0];
 	float nm = ImgProperties[2];
@@ -161,9 +158,122 @@ __global__ void Cmplx2Mag(cufftComplex* cmplxArray, float* MagArray, int size, i
 		//////////////// FUnction to compile into DLL
 		////////////////////////////////////////////////
 
+void GPU_Holo_v1(float* h_bfpMag, float* h_bfpPhase,
+	float* h_ImgOutRe, float* h_ImgOutIm,
+	float* zscale, int* arraySize, float* imgProperties) {
+	
+	// Declare all constants here from the array size
+	// arraySize={row,column,zrange, resizeRow}
+
+	const int row = arraySize[0];
+	const int column = arraySize[1];
+	const int zrange = arraySize[2];
+	const size_t memZsize = zrange * sizeof(float);
+	const int size2Darray = row * column;
+	const size_t mem2Darray = size2Darray * sizeof(float);
+	const int size3Darray = row * column * zrange;
+	const size_t mem3Darray = size3Darray * sizeof(float);
+	const size_t mem3dsize = size3Darray * sizeof(cufftComplex);
+	
+	const int resizeRow = arraySize[3];
+	const float MagXReScale = 1.0f / float(resizeRow);
+
+	// Declare all constant regarding the Kernel execution sizes, will need to add a possibility to modify these from the LV as arguments
+	const int BlockSizeAll = 512;
+	const int GridSizeKernel = (size2Darray + BlockSizeAll - 1) / BlockSizeAll;
+	const int GridSizeTransfer = (size3Darray/16 + BlockSizeAll - 1) / BlockSizeAll;
+
+	/////////////////////////////////////
+	/// Calculate the Propagation Kernel
+	/////////////////////////////////////
+		
+	float* d_kernelPhase, float* d_imgProperties;
+	const size_t sizePrp = 4 * sizeof(float);
+	cudaMalloc((void**)&d_kernelPhase, mem2Darray);
+	cudaMalloc((void**)&d_imgProperties, sizePrp);
+	cudaMemcpy(d_imgProperties, imgProperties, sizePrp, cudaMemcpyHostToDevice);
+	makeKernel_nonefftshift <<< GridSizeKernel, BlockSizeAll, 0, 0 >>>(d_kernelPhase, row, column, d_imgProperties, MagXReScale);
 
 
-		void PropagateZslices(float* h_bfpMag, float* h_bfpPhase,
+	//preallocate space for 3D array, this will be a bit costly but lets go ahead with it
+
+	float* d_bfpMag,  float* d_bfpPhase, float *d_zscale;
+	cufftComplex *d_3DiFFT;
+	cudaMalloc((void**)&d_bfpMag, mem2Darray);
+	cudaMalloc((void**)&d_bfpPhase, mem2Darray);
+	cudaMalloc((void**)&d_zscale, memZsize);
+	cudaMemcpy(d_bfpMag, h_bfpMag, mem2Darray, cudaMemcpyHostToDevice);
+	cudaMemcpy(d_bfpPhase, h_bfpPhase, mem2Darray, cudaMemcpyHostToDevice);
+	cudaMemcpy(d_zscale, zscale, memZsize, cudaMemcpyHostToDevice);
+	cudaMalloc((void**)&d_3DiFFT, mem3dsize);
+	
+	//Execute Kernels
+	TransferFunction << <GridSizeTransfer, BlockSizeAll, 0, 0 >> > (d_3DiFFT, d_bfpMag, d_bfpPhase, d_kernelPhase, d_zscale, size3Darray, size2Darray);
+	
+	//deallocate CUDA memory
+	cudaFree(d_bfpMag);
+	cudaFree(d_bfpPhase);
+	cudaFree(d_zscale);
+	cudaFree(d_imgProperties);
+	cudaFree(d_kernelPhase);
+
+	//given that LV does not accept the cmplx number array format as any I/O I need to transform the cmplx 3D array into re and im. 
+	// temporarily removed ... as the copy could be done in a single pass!
+	float* d_ImgOutRe, float* d_ImgOutIm;
+	cudaMalloc((void**)&d_ImgOutRe, mem3Darray);
+	cudaMalloc((void**)&d_ImgOutIm, mem3Darray);
+
+	/////////////////////////////////////////////////////////////////////////////////////////
+	///// Prepare batch 2D FFT plan, const declaration , should be just called a function
+	/////////////////////////////////////////////////////////////////////////////////////////
+	/* Create a batched 2D plan, or batch FFT , need to declare when each image begins! */
+	int istride = 1; //means every element is used in the computation
+	int ostride = 1; //means every element used in the computatio is output
+	int idist = row*column;
+	int odist = row*column;
+	int inembed[] = { row,column };
+	int onembed[] = { row,column };
+	const int NRANK = 2;
+	int n[NRANK] = { row,column };
+	int BATCH = zrange;
+
+	cufftHandle BatchFFTPlan;
+	if (cufftPlanMany(&BatchFFTPlan, NRANK, n,
+		inembed, istride, idist,// *inembed, istride, idist 
+		onembed, ostride, odist,// *onembed, ostride, odist 
+		CUFFT_C2C, BATCH) != CUFFT_SUCCESS)
+	{
+		fprintf(stderr, "CUFFT Error: Unable to create plan\n");
+		return;
+	}
+	
+	//////// Execute the transform in-place
+	if (cufftExecC2C(BatchFFTPlan, d_3DiFFT, d_3DiFFT, CUFFT_INVERSE) != CUFFT_SUCCESS) {
+		fprintf(stderr, "CUFFT Error: Failed to execute plan\n");
+		return;
+	}
+
+	//free handle , Although might be able to reuse upon the last execution
+	cufftDestroy(BatchFFTPlan);
+
+
+	///////////
+	// FFT ends
+	///////////
+
+	//Kernel to transform into a LV happy readable array
+	Cmplx2ReIm <<<GridSizeTransfer, BlockSizeAll, 0, 0 >>> (d_3DiFFT, d_ImgOutRe, d_ImgOutIm, size3Darray, size2Darray);
+	cudaFree(d_3DiFFT);
+	
+	cudaMemcpy(h_ImgOutRe, d_ImgOutRe, mem3Darray, cudaMemcpyDeviceToHost);
+	cudaMemcpy(h_ImgOutIm, d_ImgOutIm, mem3Darray, cudaMemcpyDeviceToHost);
+	cudaFree(d_ImgOutRe);
+	cudaFree(d_ImgOutIm);
+
+}
+
+
+void PropagateZslices(float* h_bfpMag, float* h_bfpPhase,
 			float* h_ImgOutRe, float* h_ImgOutIm,
 			float* zscale, int* arraySize, float* imgProperties){
 
@@ -172,14 +282,8 @@ __global__ void Cmplx2Mag(cufftComplex* cmplxArray, float* MagArray, int size, i
 			int column = arraySize[1];
 			int zrange = arraySize[2];
 			int resizeRow = arraySize[3];
-
-
 			float MagXReScale = 1.0f/float(resizeRow);
-
-
-		
-
-
+			
 			//////////////////////////////////////////////////
 			//transfer data from host memory to GPU 
 			//// idea is to avoid an expensive c++ allocation and copying values into a complex array format
@@ -298,8 +402,7 @@ __global__ void Cmplx2Mag(cufftComplex* cmplxArray, float* MagArray, int size, i
 
 
 
-
-		void PropagateZ_ReturnMagnitude(float* h_bfpMag, float* h_bfpPhase,
+void PropagateZ_ReturnMagnitude(float* h_bfpMag, float* h_bfpPhase,
 			float* h_ImgOutMag, float* zscale, int* arraySize, float* imgProperties) {
 
 			//Extract the size of the 2D and 3D arrays, and their respect allocation sizes
@@ -307,14 +410,8 @@ __global__ void Cmplx2Mag(cufftComplex* cmplxArray, float* MagArray, int size, i
 			int column = arraySize[1];
 			int zrange = arraySize[2];
 			int resizeRow = arraySize[3];
-
-
 			float MagXReScale = 1.0f / float(resizeRow);
-
-
-
-
-
+			
 			//////////////////////////////////////////////////
 			//transfer data from host memory to GPU 
 			//// idea is to avoid an expensive c++ allocation and copying values into a complex array format
@@ -432,7 +529,7 @@ __global__ void Cmplx2Mag(cufftComplex* cmplxArray, float* MagArray, int size, i
 		}
 			
 
-		void TestMakeKernel3D(float* h_bfpMag, float* h_bfpPhase,
+void TestMakeKernel3D(float* h_bfpMag, float* h_bfpPhase,
 			float* h_ImgOutRe, float* h_ImgOutIm,
 			float* zscale, int* arraySize, float* imgProperties) {
 
