@@ -74,7 +74,7 @@ __global__ void makeKernel(float* KernelPhase, int row, int column, float* ImgPr
 		float kdx = float( dx - row/2)*pixdxInv;
 		float kdy = float( dy - row/2)*pixdxInv;
 		float temp = km*km - kdx*kdx - kdy*kdy;
-		KernelPhase[i]= (temp >= 0) ? sqrtf(temp) : 0;
+		KernelPhase[i]= (temp >= 0) ? (sqrtf(temp)-km) : 0;
 
 
 		//This still needs quadrant swapping so this will not work in the ifft routine as is! 
@@ -107,8 +107,32 @@ __global__ void makeKernel_nonefftshift(float* KernelPhase, int row, int column,
 		float kdx = float(dx)*pixdxInv;
 		float kdy = float(dy)*pixdxInv;
 		float temp = km*km - kdx*kdx - kdy*kdy;
-		KernelPhase[i] = (temp >= 0) ? sqrtf(temp) : 0;
+		KernelPhase[i] = (temp >= 0) ? (sqrtf(temp)-km) : 0;
 	}
+}
+
+__global__ void makeKernelPhase(float* KernelPhase, int row, int column, float* ImgProperties) {
+
+	const int numThreads = blockDim.x * gridDim.x;
+	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
+	const float pixdxInv = ImgProperties[1] / ImgProperties[0]; // Magnification/pixSize
+	const float km = ImgProperties[2] / ImgProperties[3]; // nm / lambda
+
+
+	for (int i = threadID; i < row*column; i += numThreads) {
+		int dx = i % row;
+		int dy = i / row;
+
+		dx = ((dx - row / 2)>0) ? (dx - row) : dx;
+		dy = ((dy - row / 2)>0) ? (dy - row) : dy;
+
+		float kdx = float(dx)*pixdxInv/row;
+		float kdy = float(dy)*pixdxInv/row;
+		float temp = km*km - kdx*kdx - kdy*kdy;
+		KernelPhase[i] = (temp >= 0) ? (sqrtf(temp)-km) : 0;
+	}
+
+
 }
 
 
@@ -164,6 +188,7 @@ void GPU_Holo_v1(float* h_bfpMag, float* h_bfpPhase,
 	
 	// Declare all constants here from the array size
 	// arraySize={row,column,zrange, resizeRow}
+	// note that zscale has already been multiplied by 2pi, just so that C does not have to do so
 
 	const int row = arraySize[0];
 	const int column = arraySize[1];
@@ -192,7 +217,7 @@ void GPU_Holo_v1(float* h_bfpMag, float* h_bfpPhase,
 	cudaMalloc((void**)&d_kernelPhase, mem2Darray);
 	cudaMalloc((void**)&d_imgProperties, sizePrp);
 	cudaMemcpy(d_imgProperties, imgProperties, sizePrp, cudaMemcpyHostToDevice);
-	makeKernel_nonefftshift <<< GridSizeKernel, BlockSizeAll, 0, 0 >>>(d_kernelPhase, row, column, d_imgProperties, MagXReScale);
+	makeKernelPhase <<< GridSizeKernel, BlockSizeAll, 0, 0 >>>(d_kernelPhase, row, column, d_imgProperties);
 
 
 	//preallocate space for 3D array, this will be a bit costly but lets go ahead with it
