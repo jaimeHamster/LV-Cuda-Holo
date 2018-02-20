@@ -46,6 +46,8 @@ __declspec(dllexport) void __cdecl GPU_Holo_v1(float* h_bfpMag, float* h_bfpPhas
 	float* h_ImgOutRe, float* h_ImgOutIm,
 	float* zscale, int* arraySize, float* imgProperties);
 
+__declspec(dllexport) void GPU_Holo_v2(float* h_bfpMag, float* h_bfpPhase,
+	float* h_ImgOutAmp, float* zscale, int* arraySize, float* imgProperties);
 
 // non-optimised version of the processing
 __declspec(dllexport) void __cdecl Propagate3Dz_CSG(float* h_KernelRE, float* h_KernelIm,
