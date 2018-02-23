@@ -158,7 +158,7 @@ __global__ void Cmplx2ReIm(cufftComplex* cmplxArray, float* reArray, float* imgA
 			const int numThreads = blockDim.x * gridDim.x;
 			const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
 			for (int i = threadID; i < size; i += numThreads){
-				int k = i/imgsize;
+				int k = i/imgsize; //does this do anything????
 				reArray[i] = cmplxArray[i].x;
 				imgArray[i] = cmplxArray[i].y;
 

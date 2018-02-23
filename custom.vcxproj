@@ -192,6 +192,7 @@
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="customDLLfunctions.cu" />
+    <CudaCompile Include="FFT_RoutineMatz.cu" />
     <CudaCompile Include="LV_HoloCode.cu" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
