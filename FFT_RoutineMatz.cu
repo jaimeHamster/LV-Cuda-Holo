@@ -49,8 +49,8 @@ __global__ void FrequencyFilter(cufftComplex* BFP, cufftComplex* GradBFP, float*
 	const int numThreads = blockDim.x * gridDim.x;
 	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
 	const int size = row*column;
-	const float kdx = Top ? imgProp[0] : imgProp[1];
-	const float kdy = Top ? imgProp[1] : imgProp[0];
+	float kdx;
+	float kdy;
 	const float kdr = imgProp[2];
 
 	for (int i = threadID; i < size; i += numThreads) {
@@ -62,25 +62,47 @@ __global__ void FrequencyFilter(cufftComplex* BFP, cufftComplex* GradBFP, float*
 		int dy = (idy < (row / 2)) ? idy : (idy - row);
 		float temp = kdr*kdr - dx*dx - dy*dy;
 
-		/*Find the index to shift the BFP by!, */
-		if (idx < (row/2)) {
-			//idx = (kdx>0)? idx+kdx : row + (idx - kdx);
-			idx = idx + kdx;
-		}
-		else {
-			//idx = (-dx > kdx) ? idx+kdx  : row + (-dx - kdx);
-			idx = dx + kdx;
-		}
+		if (Top) {
+				kdx = imgProp[0];
+				kdy = imgProp[1];
 
-		if (idy < (row/2)){
-			//idy = (idy > kdy) ? idy + kdy : row + (idy - kdy);
-			idy = idy + kdy;
-		}
-		else {
-			//idy = (-dy > kdy) ? dy + kdy : row + (-dy - kdy);
-			idy = dy + kdy;
-		}
+				if (idx < (row / 2)) {
+					idx = idx + kdx;
+				}
+				else {
+					idx = ((dx + kdx)>0)? dx+kdx : idx-kdx;
+				}
 
+				if (idy < (row / 2)) {
+					idy = idy + kdy;
+				}
+				else {
+					idy = ((dy + kdy)>0) ? dy + kdy : idy-kdy;
+				}
+
+
+
+			}
+			else {
+				kdx = imgProp[1];
+				kdy = imgProp[0];
+
+				if (idx < (row / 2)) {
+					idx = idx + kdx;
+				}
+				else {
+					idx = ((dx + kdx)>0) ? dx + kdx : idx - kdx;
+				}
+
+				if (idy < (row / 2)) {
+					idy = idy + kdy;
+				}
+				else {
+					idy = ((dy + kdy)>0) ? dy + kdy : idy - kdy;
+				}
+
+			}
+		
 		//;
 		//;
 
@@ -173,8 +195,8 @@ void ExtractGradients(float* h_rawImg, int* arraySize, float* imgProperties,
 
 
 	/// Inverse FFT in-place for each of the gradients
-		//cufftExecC2C(SingleFFTPlan, d_GradDx, d_GradDx, CUFFT_INVERSE);
-		//cufftExecC2C(SingleFFTPlan, d_GradDy, d_GradDy, CUFFT_INVERSE);
+		cufftExecC2C(SingleFFTPlan, d_GradDx, d_GradDx, CUFFT_INVERSE);
+		cufftExecC2C(SingleFFTPlan, d_GradDy, d_GradDy, CUFFT_INVERSE);
 
 	//free handle , Although might be able to reuse upon the last execution
 		cufftDestroy(SingleFFTPlan);
@@ -191,9 +213,7 @@ void ExtractGradients(float* h_rawImg, int* arraySize, float* imgProperties,
 		cudaMalloc((void**)&d_ImgDyOutIm, mem2Darray);
 		
 
-		//C2R << <GridSizeKernel, BlockSizeAll, 0, 0 >> > (d_GradDx, d_ImgDxOutRe, d_ImgDxOutIm, size2Darray);
-		C2R << <GridSizeKernel, BlockSizeAll, 0, 0 >> > (d_BFP, d_ImgDxOutRe, d_ImgDxOutIm, size2Darray);
-		cudaFree(d_GradDx);
+		C2R << <GridSizeKernel, BlockSizeAll, 0, 0 >> > (d_GradDx, d_ImgDxOutRe, d_ImgDxOutIm, size2Darray);
 		C2R << <GridSizeKernel, BlockSizeAll, 0, 0 >> > (d_GradDy, d_ImgDyOutRe, d_ImgDyOutIm, size2Darray);
 		cudaFree(d_GradDy);
 
