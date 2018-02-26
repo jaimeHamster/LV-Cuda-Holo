@@ -32,6 +32,63 @@ __global__ void C2R(cufftComplex* cmplxArray, float* reArray, float* imgArray, i
 	}
 }
 
+__global__ void TiltCorrection(cufftComplex* imgData, float* imgProp, int row, int column) {
+	const int numThreads = blockDim.x * gridDim.x;
+	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
+	const int size = row*column;
+	const float kdx = imgProp[0];
+	const float kdy = imgProp[1];
+	const float kdr = imgProp[2];
+
+	for (int i = threadID; i < size; i += numThreads) {
+	
+	}
+}
+
+__global__ void FrequencyFilter(cufftComplex* BFP, cufftComplex* GradBFP, float* imgProp, int row, int column, BOOLEAN Top) {
+	const int numThreads = blockDim.x * gridDim.x;
+	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
+	const int size = row*column;
+	const float kdx = Top ? imgProp[0] : imgProp[1];
+	const float kdy = Top ? imgProp[1] : imgProp[0];
+	const float kdr = imgProp[2];
+
+	for (int i = threadID; i < size; i += numThreads) {
+		int idx = i % row;
+		int idy = i / row;
+
+		/* represents the mask for bandpass frequency filtering*/
+		int dx = (idx < (row / 2)) ? idx : (idx - row);
+		int dy = (idy < (row / 2)) ? idy : (idy - row);
+		float temp = kdr*kdr - dx*dx - dy*dy;
+
+		/*Find the index to shift the BFP by!, */
+		if (idx < (row/2)) {
+			//idx = (kdx>0)? idx+kdx : row + (idx - kdx);
+			idx = idx + kdx;
+		}
+		else {
+			//idx = (-dx > kdx) ? idx+kdx  : row + (-dx - kdx);
+			idx = dx + kdx;
+		}
+
+		if (idy < (row/2)){
+			//idy = (idy > kdy) ? idy + kdy : row + (idy - kdy);
+			idy = idy + kdy;
+		}
+		else {
+			//idy = (-dy > kdy) ? dy + kdy : row + (-dy - kdy);
+			idy = dy + kdy;
+		}
+
+		//;
+		//;
+
+		GradBFP[i].x = (temp>=0) ? BFP[idx + idy*row].x : 0;
+		GradBFP[i].y = (temp>=0) ? BFP[idx + idy*row].y : 0;
+		
+	}
+}
 ///////////////////////
 //////////////// Executable functions 
 ///////////////////////
@@ -104,13 +161,20 @@ void ExtractGradients(float* h_rawImg, int* arraySize, float* imgProperties,
 
 	/// Execute FFT transform in-place to go into kspace, 
 		cufftExecC2C(SingleFFTPlan, d_BFP, d_BFP, CUFFT_FORWARD);
+		//so far so good up to here
 
 	/// Extract gradients in X and Y, frequency filtering 
+		BOOLEAN Top = 1;
+		FrequencyFilter <<<GridSizeKernel, BlockSizeAll, 0, 0 >>> (d_BFP, d_GradDy, d_imgProperties, row, column, Top);
+		Top = 0;
+		FrequencyFilter <<<GridSizeKernel, BlockSizeAll, 0, 0 >>> (d_BFP, d_GradDx, d_imgProperties, row, column, Top);
+
+		//Seems that i have a problem here!
 
 
 	/// Inverse FFT in-place for each of the gradients
-		cufftExecC2C(SingleFFTPlan, d_GradDx, d_GradDx, CUFFT_INVERSE);
-		cufftExecC2C(SingleFFTPlan, d_GradDy, d_GradDy, CUFFT_INVERSE);
+		//cufftExecC2C(SingleFFTPlan, d_GradDx, d_GradDx, CUFFT_INVERSE);
+		//cufftExecC2C(SingleFFTPlan, d_GradDy, d_GradDy, CUFFT_INVERSE);
 
 	//free handle , Although might be able to reuse upon the last execution
 		cufftDestroy(SingleFFTPlan);
@@ -127,9 +191,10 @@ void ExtractGradients(float* h_rawImg, int* arraySize, float* imgProperties,
 		cudaMalloc((void**)&d_ImgDyOutIm, mem2Darray);
 		
 
-		C2R << <GridSizeTransfer, BlockSizeAll, 0, 0 >> > (d_GradDx, d_ImgDxOutRe, d_ImgDxOutIm, size2Darray);
+		//C2R << <GridSizeKernel, BlockSizeAll, 0, 0 >> > (d_GradDx, d_ImgDxOutRe, d_ImgDxOutIm, size2Darray);
+		C2R << <GridSizeKernel, BlockSizeAll, 0, 0 >> > (d_BFP, d_ImgDxOutRe, d_ImgDxOutIm, size2Darray);
 		cudaFree(d_GradDx);
-		C2R << <GridSizeTransfer, BlockSizeAll, 0, 0 >> > (d_GradDy, d_ImgDyOutRe, d_ImgDyOutIm, size2Darray);
+		C2R << <GridSizeKernel, BlockSizeAll, 0, 0 >> > (d_GradDy, d_ImgDyOutRe, d_ImgDyOutIm, size2Darray);
 		cudaFree(d_GradDy);
 
 		cudaMemcpy(h_ImgDxOutRe, d_ImgDxOutRe, mem2Darray, cudaMemcpyDeviceToHost);
@@ -142,6 +207,7 @@ void ExtractGradients(float* h_rawImg, int* arraySize, float* imgProperties,
 		cudaFree(d_ImgDyOutRe);
 		cudaFree(d_ImgDyOutIm);
 
+		//exporting is correct
 		//d_ImgdxOutRe
 	///////////
 	// FFT ends
