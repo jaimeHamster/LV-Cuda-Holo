@@ -143,8 +143,8 @@ __global__ void ExtractGradsBFP(cufftComplex* BFP, cufftComplex* GradxBFP, cufft
 				iidx = iidx + kdy;
 			}
 			else {
-				idx = ((dx + kdx)>0) ? dx + kdx : idx - kdx;
-				iidx = ((dx + kdy)>0) ? dx + kdy : iidx - kdy;
+				idx = ((dx + kdx)>0) ? dx + kdx : idx + kdx;
+				iidx = ((dx + kdy)>0) ? dx + kdy : iidx + kdy;
 			}
 
 			if (idy < (row / 2)) {
@@ -152,8 +152,8 @@ __global__ void ExtractGradsBFP(cufftComplex* BFP, cufftComplex* GradxBFP, cufft
 				iidy = iidy + kdx;
 			}
 			else {
-				idy = ((dy + kdy) > 0) ? dy + kdy : idy - kdy;
-				iidy = ((dy + kdx) > 0) ? dy + kdx : iidy - kdx;
+				idy = ((dy + kdy) > 0) ? dy + kdy : idy + kdy;
+				iidy = ((dy + kdx) > 0) ? dy + kdx : iidy + kdx;
 			}
 		
 		//;
