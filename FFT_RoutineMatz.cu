@@ -100,6 +100,59 @@ __global__ void ExtractGradsBFP(cufftComplex* BFP,
 
 	}
 }
+
+
+__global__ void ExtractGradsBFP_Optimised(cufftComplex* BFP,
+	cufftComplex* GradAll, int* imgProp, int row, int column)
+{
+	const int numThreads = blockDim.x * gridDim.x;
+	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
+	const int size = row*column*3; // three sets of arrays!
+	const int kdr = imgProp[2];
+	int kdx;
+	int kdy;
+
+	//only seems to work for images with an odd number of rows and columns!
+	//breaks down for negative kdx and kdy
+
+	for (int i = threadID; i < size; i += numThreads) {
+		int k = i % (row*column);
+		int inum = i/ (row*column);
+		int idx = k % row;
+		int idy = k / row;
+		
+		if (inum = 0) {
+			kdx = imgProp[0];
+			kdy = imgProp[1];
+		}
+		else if (inum = 1) {
+			kdx = imgProp[1];
+			kdy = imgProp[0];
+		}
+
+		else {
+			kdx = 0;
+			kdy = 0;
+		}
+				
+		/* represents the mask for bandpass frequency filtering*/
+		int dx = (idx < (row / 2)) ? idx : (idx - row);
+		int dy = (idy < (row / 2)) ? idy : (idy - row);
+		float temp = kdr*kdr - dx*dx - dy*dy;
+
+		//declare a bunch of dummy variables to hold the different indices
+		int tempxx = idx + kdx;
+		int tempyy = idy + kdy;
+		idx = (tempxx < 0) ? row + tempxx : (tempxx < row) ? tempxx : dx + kdx;
+		idy = (tempyy < 0) ? row + tempyy : (tempyy < row) ? tempyy : dy + kdy;
+		
+
+		GradAll[i].x = (temp < 0) ? 0 : BFP[idx + idy*row + inum*row*column].x;
+		GradAll[i].y = (temp < 0) ? 0 : BFP[idx + idy*row + inum*row*column].y;
+	
+
+	}
+}
 ///////////////////////
 //////////////// Executable functions 
 ///////////////////////
@@ -173,6 +226,7 @@ void ExtractGradients(float* h_rawImg, int* arraySize, int* imgProperties,
 
 	// Convert d-raw img into a complex number!
 		real2complex <<<GridSizeKernel, BlockSizeAll, 0, 0 >>>(d_rawImg, d_BFP, size2Darray);
+		cudaFree(d_rawImg);
 
 	/// Execute FFT transform in-place to go into kspace, 
 		cufftExecC2C(SingleFFTPlan, d_BFP, d_BFP, CUFFT_FORWARD);
@@ -181,7 +235,7 @@ void ExtractGradients(float* h_rawImg, int* arraySize, int* imgProperties,
 	/// Extract gradients in X and Y, frequency filtering 
 		
 		ExtractGradsBFP << <GridSizeKernel, BlockSizeAll, 0, 0 >> > (d_BFP, d_GradDx, d_GradDy, d_DC, d_imgProperties, row, column);
-		
+		cudaFree(d_BFP);
 			
 		/*BOOLEAN Top = 1;
 		FrequencyFilter <<<GridSizeKernel, BlockSizeAll, 0, 0 >>> (d_BFP, d_GradDy, d_imgProperties, row, column, Top);
@@ -221,7 +275,7 @@ void ExtractGradients(float* h_rawImg, int* arraySize, int* imgProperties,
 		cudaFree(d_GradDx);
 		cudaFree(d_GradDy);
 		cudaFree(d_DC);
-		cudaFree(d_BFP);
+		
 
 
 		cudaMemcpy(h_ImgDxOutRe, d_ImgDxOutRe, mem2Darray, cudaMemcpyDeviceToHost);
