@@ -9,6 +9,8 @@
 ///////////// Device specific operations
 //////////////////////////
 
+//#define sign(a) ((a) > 0 ? +1 : ((a) < 0 ? -1 : 0));
+
 
 __global__ void real2complex(float *dataIn, cufftComplex *dataOut, int arraysize)
 {
@@ -33,136 +35,66 @@ __global__ void C2R(cufftComplex* cmplxArray, float* reArray, float* imgArray, i
 }
 
 
-__global__ void FrequencyFilter(cufftComplex* BFP, cufftComplex* GradBFP, float* imgProp, int row, int column, BOOLEAN Top) {
+__global__ void ExtractGradsBFP(cufftComplex* BFP,
+	cufftComplex* GradxBFP, cufftComplex* GradyBFP, cufftComplex* DC_BFP,
+	int* imgProp, int row, int column) 
+{
 	const int numThreads = blockDim.x * gridDim.x;
 	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
 	const int size = row*column;
-    const float kdr = imgProp[2];
+	const int kdx = imgProp[0];
+	const int kdy = imgProp[1];
+	const int kdr = imgProp[2];
+
+	//only seems to work for images with an odd number of rows and columns!
+	//breaks down for negative kdx and kdy
 
 	for (int i = threadID; i < size; i += numThreads) {
 		int idx = i % row;
 		int idy = i / row;
-
+		
+		//bunch of dummy variables to avoid overwriting
+		int idx2= idx;
+		int idy2= idy;
+		int idx1 = idx;
+		int idy1 = idy;
+		
 		/* represents the mask for bandpass frequency filtering*/
 		int dx = (idx < (row / 2)) ? idx : (idx - row);
 		int dy = (idy < (row / 2)) ? idy : (idy - row);
 		float temp = kdr*kdr - dx*dx - dy*dy;
 
-		if (Top) {
-				float kdx = imgProp[0];
-				float kdy = imgProp[1];
+		//declare a bunch of dummy variables to hold the different indices
+		int tempxx = idx + kdx;
+		int tempyy = idy + kdy;
+		int tempxy = idx + kdy;
+		int tempyx = idy + kdx;
 
-				if (idx < (row / 2)) {
-					idx = idx + kdx;
-				}
-				else {
-					idx = ((dx + kdx)>0)? dx+kdx : idx-kdx;
-				}
+		// no need for the case of tempx>row/2 since this continues as is!
 
-				if (idy < (row / 2)) {
-					idy = idy + kdy;
-				}
-				else {
-					idy = ((dy + kdy)>0) ? dy + kdy : idy-kdy;
-				}
+		if (idx < (row / 2)){
+			idx1 = (tempxx < 0) ? row + tempxx : tempxx;
+			idx2 = (tempxy < 0) ? row + tempxy : tempxy;
+		}
+		else{
+			idx1 = (tempxx < row) ? tempxx  :dx + kdx ;
+			idx2 = (tempxy < row) ? tempxy : dx + kdy ;
+		}
 
+		if (idy < (row / 2)) {
+			idy1 = (tempyy < 0) ? row + tempyy : tempyy;
+			idy2 = (tempyx < 0) ? row + tempyx : tempyx;
+		}
+		else {
+			idy1 = (tempyy < row) ?  tempyy : dy + kdy;
+			idy2 = (tempyx < row) ? tempyx : dy + kdx;
+		}
 
-
-			}
-			else {
-				float kdx = imgProp[1];
-				float kdy = imgProp[0];
-
-				if (idx < (row / 2)) {
-					idx = idx + kdx;
-				}
-				else {
-					idx = ((dx + kdx)>0) ? dx + kdx : idx - kdx;
-				}
-
-				if (idy < (row / 2)) {
-					idy = idy + kdy;
-				}
-				else {
-					idy = ((dy + kdy)>0) ? dy + kdy : idy - kdy;
-				}
-
-			}
 		
-		//;
-		//;
-
-		GradBFP[i].x = (temp>=0) ? BFP[idx + idy*row].x : 0;
-		GradBFP[i].y = (temp>=0) ? BFP[idx + idy*row].y : 0;
-		
-	}
-}
-
-
-__global__ void ExtractGradsBFP(cufftComplex* BFP, cufftComplex* GradxBFP, cufftComplex* GradyBFP, cufftComplex* DC_BFP, float* imgProp, int row, int column) {
-	const int numThreads = blockDim.x * gridDim.x;
-	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
-	const int size = row*column;
-	const float kdx = imgProp[0];
-	const float kdy = imgProp[1];
-	const float kdr = imgProp[2];
-	
-
-	for (int i = threadID; i < size; i += numThreads) {
-		int idx = i % row;
-		int idy = i / row;
-		int iidx= idx;
-		int iidy= idy;
-		/* represents the mask for bandpass frequency filtering*/
-		int dx = (idx < (row / 2)) ? idx : (idx - row);
-		int dy = (idy < (row / 2)) ? idy : (idy - row);
-		float temp = kdr*kdr - dx*dx - dy*dy;
-		
-
-		/*if (idx < (row / 2)) {
-				idx = idx + kdx;
-				iidx = iidx + kdy;
-			}
-			else {
-				idx = ((dx + kdx)>0) ? dx + kdx : idx - kdx;
-				iidx = ((dx + kdy)>0) ? dx + kdy : iidx - kdy;
-			}
-
-			if (idy < (row / 2)) {
-				idy = idy + kdy;
-				iidy = iidy + kdx;
-			}
-			else {
-				idy = ((dy + kdy) > 0) ? dy + kdy : idy - kdy;
-				iidy = ((dy + kdx) > 0) ? dy + kdx : iidy - kdx;
-			}*/
-
-
-			if (idx < (row / 2)) {
-				idx = idx + kdx;
-				iidx = iidx + kdy;
-			}
-			else {
-				idx = ((dx + kdx)>0) ? dx + kdx : idx + kdx;
-				iidx = ((dx + kdy)>0) ? dx + kdy : iidx + kdy;
-			}
-
-			if (idy < (row / 2)) {
-				idy = idy + kdy;
-				iidy = iidy + kdx;
-			}
-			else {
-				idy = ((dy + kdy) > 0) ? dy + kdy : idy + kdy;
-				iidy = ((dy + kdx) > 0) ? dy + kdx : iidy + kdx;
-			}
-		
-		//;
-		//;
-		//Problems for kdx different than 0!
-		GradyBFP[i].x = (temp >= 0) ? BFP[idx + idy*row].x : 0;
-		GradyBFP[i].y = (temp >= 0) ? BFP[idx + idy*row].y : 0;
-		GradxBFP[i].x = (temp >= 0) ? BFP[iidx + iidy*row].x : 0;
-		GradxBFP[i].y = (temp >= 0) ? BFP[iidx + iidy*row].y : 0;
+		GradyBFP[i].x = (temp >= 0) ? BFP[idx1 + idy1*row].x : 0;
+		GradyBFP[i].y = (temp >= 0) ? BFP[idx1 + idy1*row].y : 0;
+		GradxBFP[i].x = (temp >= 0) ? BFP[idx2 + idy2*row].x : 0;
+		GradxBFP[i].y = (temp >= 0) ? BFP[idx2 + idy2*row].y : 0;
 		DC_BFP[i].x = (temp >= 0) ? BFP[i].x : 0;
 		DC_BFP[i].y = (temp >= 0) ? BFP[i].y : 0;
 
@@ -173,12 +105,12 @@ __global__ void ExtractGradsBFP(cufftComplex* BFP, cufftComplex* GradxBFP, cufft
 ///////////////////////
 
 
-void ExtractGradients(float* h_rawImg, int* arraySize, float* imgProperties,
+void ExtractGradients(float* h_rawImg, int* arraySize, int* imgProperties,
 	float* h_ImgDxOutRe, float* h_ImgDxOutIm,
-	float* h_ImgDyOutRe, float* h_ImgDyOutIm, 
+	float* h_ImgDyOutRe, float* h_ImgDyOutIm,
 	float* h_ImgDCOutRe, float* h_ImgDCOutIm) {
-	
-//Declare constants
+
+	//Declare constants
 	const int row = arraySize[0];
 	const int column = arraySize[1];
 	const int zrange = 1; // in this case Matz is only doing one image at a time
@@ -187,13 +119,14 @@ void ExtractGradients(float* h_rawImg, int* arraySize, float* imgProperties,
 	const size_t mem2Darray = size2Darray * sizeof(float);
 	const size_t mem2DFFTsize = size2Darray * sizeof(cufftComplex);
 
- // Declare all constant regarding the Kernel execution sizes, will need to add a possibility to modify these from the LV as arguments
-	const int BlockSizeAll = 512;
+	// Declare all constant regarding the Kernel execution sizes, will need to add a possibility to modify these from the LV as arguments
+	const int BlockSizeAll = arraySize[3]; //my computer should be 512
 	const int GridSizeKernel = (size2Darray + BlockSizeAll - 1) / BlockSizeAll;
 
 // Copy Raw Img and spatial filtering constants to GPU device
-	float* d_rawImg, float* d_imgProperties;
-	const size_t sizePrp = imgpropsize * sizeof(float);
+	float* d_rawImg;
+	int* d_imgProperties;
+	const size_t sizePrp = imgpropsize * sizeof(int);
 	cudaMalloc((void**)&d_rawImg, mem2Darray);
 	cudaMemcpy(d_rawImg, h_rawImg, mem2Darray, cudaMemcpyHostToDevice);
 	cudaMalloc((void**)&d_imgProperties, sizePrp);
