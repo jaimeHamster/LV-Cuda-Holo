@@ -121,11 +121,11 @@ __global__ void ExtractGradsBFP_Optimised(cufftComplex* BFP,
 		int idx = k % row;
 		int idy = k / row;
 		
-		if (inum = 0) {
+		if (inum == 0) {
 			kdx = imgProp[0];
 			kdy = imgProp[1];
 		}
-		else if (inum = 1) {
+		else if (inum == 1) {
 			kdx = imgProp[1];
 			kdy = imgProp[0];
 		}
@@ -237,12 +237,6 @@ void ExtractGradients(float* h_rawImg, int* arraySize, int* imgProperties,
 		ExtractGradsBFP << <GridSizeKernel, BlockSizeAll, 0, 0 >> > (d_BFP, d_GradDx, d_GradDy, d_DC, d_imgProperties, row, column);
 		cudaFree(d_BFP);
 			
-		/*BOOLEAN Top = 1;
-		FrequencyFilter <<<GridSizeKernel, BlockSizeAll, 0, 0 >>> (d_BFP, d_GradDy, d_imgProperties, row, column, Top);
-		Top = 0;
-		FrequencyFilter <<<GridSizeKernel, BlockSizeAll, 0, 0 >>> (d_BFP, d_GradDx, d_imgProperties, row, column, Top);*/
-
-
 
 	/// Inverse FFT in-place for each of the gradients 
 		// can think of batching this!
