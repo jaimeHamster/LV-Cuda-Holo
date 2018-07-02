@@ -20,6 +20,7 @@
 #include <ctype.h>
 #include <math.h>
 
+#define BIG 100000
 
 //declare all the functions I want to include in the .dll HERE
 #ifdef __cplusplus
@@ -29,6 +30,10 @@ extern "C" {
 ////////////
 //Main functions that operate on holograms
 /////////////
+
+
+__declspec(dllexport) float __cdecl lap(int dim, float* assigncost,
+		int* rowsol, int* colsol, float* u, float* v);
 
 __declspec(dllexport) void __cdecl PropagateZ_ReturnMagnitude(float* h_bfpMag, float* h_bfpPhase,
 		float* h_ImgOutMag,
