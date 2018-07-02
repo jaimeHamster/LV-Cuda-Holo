@@ -55,7 +55,7 @@ __declspec(dllexport) void GPU_Holo_v2(float* h_bfpMag, float* h_bfpPhase,
 	float* h_ImgOutAmp, float* zscale, int* arraySize, float* imgProperties);
 
 
-__declspec(dllexport) void ExtractGradients(float* h_rawImg, int* arraySize, float* imgProperties,
+__declspec(dllexport) void ExtractGradients(float* h_rawImg, int* arraySize, int* imgProperties,
 	float* h_ImgDxOutRe, float* h_ImgDxOutIm,
 	float* h_ImgDyOutRe, float* h_ImgDyOutIm,
 	float* h_ImgDCOutRe, float* h_ImgDCOutIm);

@@ -9,6 +9,47 @@
 ///////////// Device specific operations
 //////////////////////////
 
+//#define sign(a) ((a) > 0 ? +1 : ((a) < 0 ? -1 : 0));
+
+///
+///
+#define BLOCKSIZE_CART2POL	256
+
+template <class T>
+__global__ void Cartesian2PolarKernel(const T * __restrict__ d_x, const T * __restrict__ d_y, T * __restrict__ d_rho, T * __restrict__ d_theta,
+	const int N, const T a) {
+
+	const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+	if (tid < N) {
+		d_rho[tid] = a * hypot(d_x[tid], d_y[tid]);
+		d_theta[tid] = atan2(d_y[tid], d_x[tid]);
+	}
+
+}
+
+/*******************************************************/
+/* CARTESIAN TO POLAR COORDINATES TRANSFORMATION - GPU */
+/*******************************************************/
+//template <class T>
+//thrust::pair<T *,T *> Cartesian2Polar(const T * __restrict__ d_x, const T * __restrict__ d_y, const int N, const T a) {
+//
+//	T *d_rho;	gpuErrchk(cudaMalloc((void**)&d_rho,   N * sizeof(T)));
+//	T *d_theta; gpuErrchk(cudaMalloc((void**)&d_theta, N * sizeof(T)));
+//
+//	Cartesian2PolarKernel<<<iDivUp(N, BLOCKSIZE_CART2POL), BLOCKSIZE_CART2POL>>>(d_x, d_y, d_rho, d_theta, N, a);
+//#ifdef DEBUG
+//	gpuErrchk(cudaPeekAtLastError());
+//	gpuErrchk(cudaDeviceSynchronize());
+//#endif
+//
+//	return thrust::make_pair(d_rho, d_theta);
+//}
+//
+//template thrust::pair<float  *, float  *>  Cartesian2Polar<float>  (const float  *, const float  *, const int, const float);
+//template thrust::pair<double *, double *>  Cartesian2Polar<double> (const double *, const double *, const int, const double);
+
+
 
 __global__ void real2complex(float *dataIn, cufftComplex *dataOut, int arraysize)
 {
@@ -33,138 +74,121 @@ __global__ void C2R(cufftComplex* cmplxArray, float* reArray, float* imgArray, i
 }
 
 
-__global__ void FrequencyFilter(cufftComplex* BFP, cufftComplex* GradBFP, float* imgProp, int row, int column, BOOLEAN Top) {
+__global__ void ExtractGradsBFP(cufftComplex* BFP,
+	cufftComplex* GradxBFP, cufftComplex* GradyBFP, cufftComplex* DC_BFP,
+	int* imgProp, int row, int column) 
+{
 	const int numThreads = blockDim.x * gridDim.x;
 	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
 	const int size = row*column;
-    const float kdr = imgProp[2];
+	const int kdx = imgProp[0];
+	const int kdy = imgProp[1];
+	const int kdr = imgProp[2];
+
+	//only seems to work for images with an odd number of rows and columns!
+	//breaks down for negative kdx and kdy
 
 	for (int i = threadID; i < size; i += numThreads) {
 		int idx = i % row;
 		int idy = i / row;
-
+		
+		//bunch of dummy variables to avoid overwriting
+		int idx2= idx;
+		int idy2= idy;
+		int idx1 = idx;
+		int idy1 = idy;
+		
 		/* represents the mask for bandpass frequency filtering*/
 		int dx = (idx < (row / 2)) ? idx : (idx - row);
 		int dy = (idy < (row / 2)) ? idy : (idy - row);
 		float temp = kdr*kdr - dx*dx - dy*dy;
 
-		if (Top) {
-				float kdx = imgProp[0];
-				float kdy = imgProp[1];
+		//declare a bunch of dummy variables to hold the different indices
+		int tempxx = idx + kdx;
+		int tempyy = idy + kdy;
+		int tempxy = idx + kdy;
+		int tempyx = idy + kdx;
 
-				if (idx < (row / 2)) {
-					idx = idx + kdx;
-				}
-				else {
-					idx = ((dx + kdx)>0)? dx+kdx : idx-kdx;
-				}
+		// no need for the case of tempx>row/2 since this continues as is!
 
-				if (idy < (row / 2)) {
-					idy = idy + kdy;
-				}
-				else {
-					idy = ((dy + kdy)>0) ? dy + kdy : idy-kdy;
-				}
+		if (idx < (row / 2)){
+			idx1 = (tempxx < 0) ? row + tempxx : tempxx;
+			idx2 = (tempxy < 0) ? row + tempxy : tempxy;
+		}
+		else{
+			idx1 = (tempxx < row) ? tempxx  :dx + kdx ;
+			idx2 = (tempxy < row) ? tempxy : dx + kdy ;
+		}
 
+		if (idy < (row / 2)) {
+			idy1 = (tempyy < 0) ? row + tempyy : tempyy;
+			idy2 = (tempyx < 0) ? row + tempyx : tempyx;
+		}
+		else {
+			idy1 = (tempyy < row) ?  tempyy : dy + kdy;
+			idy2 = (tempyx < row) ? tempyx : dy + kdx;
+		}
 
-
-			}
-			else {
-				float kdx = imgProp[1];
-				float kdy = imgProp[0];
-
-				if (idx < (row / 2)) {
-					idx = idx + kdx;
-				}
-				else {
-					idx = ((dx + kdx)>0) ? dx + kdx : idx - kdx;
-				}
-
-				if (idy < (row / 2)) {
-					idy = idy + kdy;
-				}
-				else {
-					idy = ((dy + kdy)>0) ? dy + kdy : idy - kdy;
-				}
-
-			}
 		
-		//;
-		//;
+		GradyBFP[i].x = (temp >= 0) ? BFP[idx1 + idy1*row].x : 0;
+		GradyBFP[i].y = (temp >= 0) ? BFP[idx1 + idy1*row].y : 0;
+		GradxBFP[i].x = (temp >= 0) ? BFP[idx2 + idy2*row].x : 0;
+		GradxBFP[i].y = (temp >= 0) ? BFP[idx2 + idy2*row].y : 0;
+		DC_BFP[i].x = (temp >= 0) ? BFP[i].x : 0;
+		DC_BFP[i].y = (temp >= 0) ? BFP[i].y : 0;
 
-		GradBFP[i].x = (temp>=0) ? BFP[idx + idy*row].x : 0;
-		GradBFP[i].y = (temp>=0) ? BFP[idx + idy*row].y : 0;
-		
 	}
 }
 
 
-__global__ void ExtractGradsBFP(cufftComplex* BFP, cufftComplex* GradxBFP, cufftComplex* GradyBFP, cufftComplex* DC_BFP, float* imgProp, int row, int column) {
+__global__ void ExtractGradsBFP_Optimised(cufftComplex* BFP,
+	cufftComplex* GradAll, int* imgProp, int row, int column)
+{
 	const int numThreads = blockDim.x * gridDim.x;
 	const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
-	const int size = row*column;
-	const float kdx = imgProp[0];
-	const float kdy = imgProp[1];
-	const float kdr = imgProp[2];
-	
+	const int size = row*column*3; // three sets of arrays!
+	const int kdr = imgProp[2];
+	int kdx;
+	int kdy;
+
+	//only seems to work for images with an odd number of rows and columns!
+	//breaks down for negative kdx and kdy
 
 	for (int i = threadID; i < size; i += numThreads) {
-		int idx = i % row;
-		int idy = i / row;
-		int iidx= idx;
-		int iidy= idy;
+		int k = i % (row*column);
+		int inum = i/ (row*column);
+		int idx = k % row;
+		int idy = k / row;
+		
+		if (inum == 0) {
+			kdx = imgProp[0];
+			kdy = imgProp[1];
+		}
+		else if (inum == 1) {
+			kdx = imgProp[1];
+			kdy = imgProp[0];
+		}
+
+		else {
+			kdx = 0;
+			kdy = 0;
+		}
+				
 		/* represents the mask for bandpass frequency filtering*/
 		int dx = (idx < (row / 2)) ? idx : (idx - row);
 		int dy = (idy < (row / 2)) ? idy : (idy - row);
 		float temp = kdr*kdr - dx*dx - dy*dy;
+
+		//declare a bunch of dummy variables to hold the different indices
+		int tempxx = idx + kdx;
+		int tempyy = idy + kdy;
+		idx = (tempxx < 0) ? row + tempxx : (tempxx < row) ? tempxx : dx + kdx;
+		idy = (tempyy < 0) ? row + tempyy : (tempyy < row) ? tempyy : dy + kdy;
 		
 
-		/*if (idx < (row / 2)) {
-				idx = idx + kdx;
-				iidx = iidx + kdy;
-			}
-			else {
-				idx = ((dx + kdx)>0) ? dx + kdx : idx - kdx;
-				iidx = ((dx + kdy)>0) ? dx + kdy : iidx - kdy;
-			}
-
-			if (idy < (row / 2)) {
-				idy = idy + kdy;
-				iidy = iidy + kdx;
-			}
-			else {
-				idy = ((dy + kdy) > 0) ? dy + kdy : idy - kdy;
-				iidy = ((dy + kdx) > 0) ? dy + kdx : iidy - kdx;
-			}*/
-
-
-			if (idx < (row / 2)) {
-				idx = idx + kdx;
-				iidx = iidx + kdy;
-			}
-			else {
-				idx = ((dx + kdx)>0) ? dx + kdx : idx + kdx;
-				iidx = ((dx + kdy)>0) ? dx + kdy : iidx + kdy;
-			}
-
-			if (idy < (row / 2)) {
-				idy = idy + kdy;
-				iidy = iidy + kdx;
-			}
-			else {
-				idy = ((dy + kdy) > 0) ? dy + kdy : idy + kdy;
-				iidy = ((dy + kdx) > 0) ? dy + kdx : iidy + kdx;
-			}
-		
-		//;
-		//;
-		//Problems for kdx different than 0!
-		GradyBFP[i].x = (temp >= 0) ? BFP[idx + idy*row].x : 0;
-		GradyBFP[i].y = (temp >= 0) ? BFP[idx + idy*row].y : 0;
-		GradxBFP[i].x = (temp >= 0) ? BFP[iidx + iidy*row].x : 0;
-		GradxBFP[i].y = (temp >= 0) ? BFP[iidx + iidy*row].y : 0;
-		DC_BFP[i].x = (temp >= 0) ? BFP[i].x : 0;
-		DC_BFP[i].y = (temp >= 0) ? BFP[i].y : 0;
+		GradAll[i].x = (temp < 0) ? 0 : BFP[idx + idy*row + inum*row*column].x;
+		GradAll[i].y = (temp < 0) ? 0 : BFP[idx + idy*row + inum*row*column].y;
+	
 
 	}
 }
@@ -173,12 +197,12 @@ __global__ void ExtractGradsBFP(cufftComplex* BFP, cufftComplex* GradxBFP, cufft
 ///////////////////////
 
 
-void ExtractGradients(float* h_rawImg, int* arraySize, float* imgProperties,
+void ExtractGradients(float* h_rawImg, int* arraySize, int* imgProperties,
 	float* h_ImgDxOutRe, float* h_ImgDxOutIm,
-	float* h_ImgDyOutRe, float* h_ImgDyOutIm, 
+	float* h_ImgDyOutRe, float* h_ImgDyOutIm,
 	float* h_ImgDCOutRe, float* h_ImgDCOutIm) {
-	
-//Declare constants
+
+	//Declare constants
 	const int row = arraySize[0];
 	const int column = arraySize[1];
 	const int zrange = 1; // in this case Matz is only doing one image at a time
@@ -187,13 +211,14 @@ void ExtractGradients(float* h_rawImg, int* arraySize, float* imgProperties,
 	const size_t mem2Darray = size2Darray * sizeof(float);
 	const size_t mem2DFFTsize = size2Darray * sizeof(cufftComplex);
 
- // Declare all constant regarding the Kernel execution sizes, will need to add a possibility to modify these from the LV as arguments
-	const int BlockSizeAll = 512;
+	// Declare all constant regarding the Kernel execution sizes, will need to add a possibility to modify these from the LV as arguments
+	const int BlockSizeAll = arraySize[3]; //my computer should be 512
 	const int GridSizeKernel = (size2Darray + BlockSizeAll - 1) / BlockSizeAll;
 
 // Copy Raw Img and spatial filtering constants to GPU device
-	float* d_rawImg, float* d_imgProperties;
-	const size_t sizePrp = imgpropsize * sizeof(float);
+	float* d_rawImg;
+	int* d_imgProperties;
+	const size_t sizePrp = imgpropsize * sizeof(int);
 	cudaMalloc((void**)&d_rawImg, mem2Darray);
 	cudaMemcpy(d_rawImg, h_rawImg, mem2Darray, cudaMemcpyHostToDevice);
 	cudaMalloc((void**)&d_imgProperties, sizePrp);
@@ -240,6 +265,7 @@ void ExtractGradients(float* h_rawImg, int* arraySize, float* imgProperties,
 
 	// Convert d-raw img into a complex number!
 		real2complex <<<GridSizeKernel, BlockSizeAll, 0, 0 >>>(d_rawImg, d_BFP, size2Darray);
+		cudaFree(d_rawImg);
 
 	/// Execute FFT transform in-place to go into kspace, 
 		cufftExecC2C(SingleFFTPlan, d_BFP, d_BFP, CUFFT_FORWARD);
@@ -248,14 +274,8 @@ void ExtractGradients(float* h_rawImg, int* arraySize, float* imgProperties,
 	/// Extract gradients in X and Y, frequency filtering 
 		
 		ExtractGradsBFP << <GridSizeKernel, BlockSizeAll, 0, 0 >> > (d_BFP, d_GradDx, d_GradDy, d_DC, d_imgProperties, row, column);
-		
+		cudaFree(d_BFP);
 			
-		/*BOOLEAN Top = 1;
-		FrequencyFilter <<<GridSizeKernel, BlockSizeAll, 0, 0 >>> (d_BFP, d_GradDy, d_imgProperties, row, column, Top);
-		Top = 0;
-		FrequencyFilter <<<GridSizeKernel, BlockSizeAll, 0, 0 >>> (d_BFP, d_GradDx, d_imgProperties, row, column, Top);*/
-
-
 
 	/// Inverse FFT in-place for each of the gradients 
 		// can think of batching this!
@@ -288,7 +308,7 @@ void ExtractGradients(float* h_rawImg, int* arraySize, float* imgProperties,
 		cudaFree(d_GradDx);
 		cudaFree(d_GradDy);
 		cudaFree(d_DC);
-		cudaFree(d_BFP);
+		
 
 
 		cudaMemcpy(h_ImgDxOutRe, d_ImgDxOutRe, mem2Darray, cudaMemcpyDeviceToHost);
