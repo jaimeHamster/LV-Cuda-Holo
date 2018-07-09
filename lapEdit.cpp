@@ -21,7 +21,7 @@
 *************************************************************************/
 
 //#include "system.h"
-#include "gnrl.h"
+//#include "gnrl.h"
 #include "CudaDLL.h"
 /*#include "lap.h"*/
 
@@ -43,7 +43,7 @@ float  lap(int dim,
 // v          - dual variables, column reduction numbers
 
 {
-  boolean unassignedfound;
+  bool unassignedfound; //switched here boolean for the c++ bool typedef
   int  i, imin, numfree = 0, prvnumfree, f, i0, k, freerow, *pred, *free;
   int  j, j1, j2, endofpath, last, low, up, *collist, *matches;
   float min, h, umin, usubmin, v2, *d;
@@ -299,75 +299,3 @@ float  lap(int dim,
   return lapcost;
 }
 
-//UNUSED by pyLAPJV, so commented out:
-/*void checklap(int dim, cost **assigncost,
-              col *rowsol, row *colsol, cost *u, cost *v)
-{
-  row  i;
-  col  j;
-  cost lapcost = 0, redcost = 0;
-  boolean *matched;
-  char wait;
-  
-  matched = new boolean[dim];
-  
-  for (i = 0; i < dim; i++)  
-    for (j = 0; j < dim; j++)  
-      if ((redcost = assigncost[i+j*rowSize] - u[i] - v[j]) < 0)
-      {
-        printf("\n");
-        printf("negative reduced cost i %d j %d redcost %d\n", i, j, redcost);
-        printf("\n\ndim %5d - press key\n", dim);
-        scanf("%d", &wait);
-        break; 
-      }
-
-  for (i = 0; i < dim; i++)  
-    if ((redcost = assigncost[i][rowsol[i]] - u[i] - v[rowsol[i]]) != 0)
-    {
-      printf("\n");
-      printf("non-null reduced cost i %d soli %d redcost %d\n", i, rowsol[i], redcost);
-      printf("\n\ndim %5d - press key\n", dim);
-      scanf("%d", &wait);
-      break; 
-    }
-  
-  for (j = 0; j < dim; j++)  
-    matched[j] = FALSE;
-    
-  for (i = 0; i < dim; i++)  
-    if (matched[rowsol[i]])
-    {
-      printf("\n");
-      printf("column matched more than once - i %d soli %d\n", i, rowsol[i]);
-      printf("\n\ndim %5d - press key\n", dim);
-      scanf("%d", &wait);
-      break; 
-    }
-    else
-      matched[rowsol[i]] = TRUE;
-      
-    
-  for (i = 0; i < dim; i++)  
-    if (colsol[rowsol[i]] != i)
-    {
-      printf("\n");
-      printf("error in row solution i %d soli %d solsoli %d\n", i, rowsol[i], colsol[rowsol[i]]);
-      printf("\n\ndim %5d - press key\n", dim);
-      scanf("%d", &wait);
-      break; 
-    }
-
-  for (j = 0; j < dim; j++)  
-    if (rowsol[colsol[j]] != j)
-    {
-      printf("\n");
-      printf("error in col solution j %d solj %d solsolj %d\n", j, colsol[j], rowsol[colsol[j]]);
-      printf("\n\ndim %5d - press key\n", dim);
-      scanf("%d", &wait);
-      break; 
-    }
-
-  delete[] matched;
-  return;
-}*/

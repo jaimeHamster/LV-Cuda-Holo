@@ -19,5 +19,5 @@
 
 /*************** DATA TYPES *******************/
 
-typedef int boolean;
+//typedef int boolean;
 
