@@ -189,9 +189,7 @@
     <ClCompile Include="Source.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\pyLAPJV\lap.h" />
     <ClInclude Include="CudaDLL.h" />
-    <ClInclude Include="gnrl.h" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="customDLLfunctions.cu" />

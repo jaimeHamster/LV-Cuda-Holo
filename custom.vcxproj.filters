@@ -31,11 +31,5 @@
     <ClInclude Include="CudaDLL.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\pyLAPJV\lap.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="gnrl.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
   </ItemGroup>
 </Project>

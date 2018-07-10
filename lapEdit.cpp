@@ -20,10 +20,9 @@
 *
 *************************************************************************/
 
-//#include "system.h"
-//#include "gnrl.h"
+
 #include "CudaDLL.h"
-/*#include "lap.h"*/
+
 
 float  lap(int dim, 
         float* assigncost,
