@@ -186,7 +186,6 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="lapEdit.cpp" />
-    <ClCompile Include="Source.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CudaDLL.h" />
