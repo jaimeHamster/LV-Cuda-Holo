@@ -183,7 +183,7 @@ __global__ void Cmplx2Mag(cufftComplex* cmplxArray, float* MagArray, int size, i
 		//////////////// FUnction to compile into DLL
 		////////////////////////////////////////////////
 
-void GPU_Holo_v1(float* h_bfpMag, float* h_bfpPhase,
+/*void GPU_Holo_v1(float* h_bfpMag, float* h_bfpPhase,
 	float* h_ImgOutRe, float* h_ImgOutIm,
 	float* zscale, int* arraySize, float* imgProperties) {
 	
@@ -252,7 +252,7 @@ void GPU_Holo_v1(float* h_bfpMag, float* h_bfpPhase,
 	/////////////////////////////////////////////////////////////////////////////////////////
 	///// Prepare batch 2D FFT plan, const declaration , should be just called a function
 	/////////////////////////////////////////////////////////////////////////////////////////
-	/* Create a batched 2D plan, or batch FFT , need to declare when each image begins! */
+	// Create a batched 2D plan, or batch FFT , need to declare when each image begins! //
 	int istride = 1; //means every element is used in the computation
 	int ostride = 1; //means every element used in the computatio is output
 	int idist = row*column;
@@ -298,8 +298,9 @@ void GPU_Holo_v1(float* h_bfpMag, float* h_bfpPhase,
 
 }
 
+*/
 
-void GPU_Holo_v2(float* h_bfpMag, float* h_bfpPhase,
+/*void GPU_Holo_v2(float* h_bfpMag, float* h_bfpPhase,
 	float* h_ImgOutAmp, float* zscale, int* arraySize, float* imgProperties) {
 
 	// Declare all constants here from the array size
@@ -366,7 +367,7 @@ void GPU_Holo_v2(float* h_bfpMag, float* h_bfpPhase,
 	/////////////////////////////////////////////////////////////////////////////////////////
 	///// Prepare batch 2D FFT plan, const declaration , should be just called a function
 	/////////////////////////////////////////////////////////////////////////////////////////
-	/* Create a batched 2D plan, or batch FFT , need to declare when each image begins! */
+	// Create a batched 2D plan, or batch FFT , need to declare when each image begins! //
 	int istride = 1; //means every element is used in the computation
 	int ostride = 1; //means every element used in the computatio is output
 	int idist = row*column;
@@ -409,6 +410,7 @@ void GPU_Holo_v2(float* h_bfpMag, float* h_bfpPhase,
 	cudaFree(d_ImgOutAmp);
 
 }
+*/
 
 void PropagateZslices(float* h_bfpMag, float* h_bfpPhase,
 			float* h_ImgOutRe, float* h_ImgOutIm,
