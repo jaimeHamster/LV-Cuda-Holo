@@ -1,4 +1,4 @@
-
+//add these two to get rid of intellisense errors
 
 #include "CudaDLL.h"
 #include <stdio.h>
@@ -441,7 +441,7 @@ void PropagateZslices(float* h_bfpMag, float* h_bfpPhase,
 			cudaMalloc((void**)&d_imgProperties, sizePrp);
 			cudaMemcpy(d_imgProperties, imgProperties, sizePrp, cudaMemcpyHostToDevice);
 
-			makeKernel_nonefftshift <<<GridSizeKernel, BlockSizeAll,0,0 >>>(d_kernelPhase, row, column, d_imgProperties, MagXReScale);
+			makeKernel_nonefftshift <<<GridSizeKernel, BlockSizeAll,0,0 >>>(d_kernelPhase, row, column, d_imgProperties);
 
 			float* d_bfpMag;
 			float* d_bfpPhase;
@@ -569,7 +569,7 @@ void PropagateZ_ReturnMagnitude(float* h_bfpMag, float* h_bfpPhase,
 			cudaMalloc((void**)&d_imgProperties, sizePrp);
 			cudaMemcpy(d_imgProperties, imgProperties, sizePrp, cudaMemcpyHostToDevice);
 
-			makeKernel_nonefftshift << <GridSizeKernel, BlockSizeAll, 0, 0 >> >(d_kernelPhase, row, column, d_imgProperties, MagXReScale);
+			makeKernel_nonefftshift << <GridSizeKernel, BlockSizeAll, 0, 0 >> >(d_kernelPhase, row, column, d_imgProperties);
 
 			float* d_bfpMag;
 			float* d_bfpPhase;
@@ -695,7 +695,7 @@ void ReturnMagnitudeZStack(float* h_bfpMag, float* h_bfpPhase,
 			cudaMalloc((void**)&d_imgProperties, sizePrp);
 			cudaMemcpy(d_imgProperties, imgProperties, sizePrp, cudaMemcpyHostToDevice);
 
-			makeKernel_nonefftshift << <GridSizeKernel, BlockSizeAll, 0, 0 >> >(d_kernelPhase, row, column, d_imgProperties, MagXReScale);
+			makeKernel_nonefftshift << <GridSizeKernel, BlockSizeAll, 0, 0 >> >(d_kernelPhase, row, column, d_imgProperties);
 
 			float* d_bfpMag;
 			float* d_bfpPhase;
