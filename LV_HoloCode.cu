@@ -105,8 +105,8 @@ __global__ void makeKernel_nonefftshift(float* KernelPhase, int row, int column,
 		dx= ((dx - row / 2)>0) ? (dx - row) : dx;
 		dy= ((dy - row / 2)>0) ? (dy - row) : dy;
 				
-		float kdx = float(dx)*pixdxInv;
-		float kdy = float(dy)*pixdxInv;
+		float kdx = float(dx)*pixdxInv/row; //added division by row
+		float kdy = float(dy)*pixdxInv/row;//added division by row
 		float temp = km*km - kdx*kdx - kdy*kdy;
 		KernelPhase[i] = (temp >= 0) ? (sqrtf(temp)-km) : 0;
 	}
@@ -666,64 +666,71 @@ void PropagateZ_ReturnMagnitude(float* h_bfpMag, float* h_bfpPhase,
 		}
 			
 
-void ReturnMagnitudeZStack(float* h_bfpMag, float* h_bfpPhase,
+void ReturnMagnitudeZStack2(float* h_bfpMag, float* h_bfpPhase,
 			float* h_ImgOutMag, float* zscale, int* arraySize, float* imgProperties, int* GPUspecs) {
 
 			//Extract the size of the 2D and 3D arrays, and their respect allocation sizes
-			int row = arraySize[0];
-			int column = arraySize[1];
-			int zrange = arraySize[2];
+			const int row = arraySize[0];
+			const int column = arraySize[1];
+			const int zrange = arraySize[2];
 			
+			const int numElements = row*column;
+			const int size3Darray = row * column*zrange;
+
+			const size_t memZsize = zrange * sizeof(float);
+			const size_t mem2Darray = numElements * sizeof(float);
+			const size_t mem3Dsize = size3Darray * sizeof(cufftComplex);
+			const size_t mem3Darray = size3Darray * sizeof(float);
+			const size_t sizePrp = 5 * sizeof(float);
+						
+
+			//Declare all constants regarding Kernel execution sizes
+			const int BlockSizeAll = 512; //GPUspecs[0];
+			const int GridSizeKernel = (numElements + BlockSizeAll - 1) / BlockSizeAll;
+			const int GridSizeTransfer = (size3Darray / 16 + BlockSizeAll - 1) / BlockSizeAll;
+
 			//////////////////////////////////////////////////
 			//transfer data from host memory to GPU 
 			//// idea is to avoid an expensive c++ allocation and copying values into a complex array format
 			////// Almost thinking of calculating the whole Kernel in the device to avoid 2 device transfers!
 
-			int numElements = row*column;
-			size_t mem2darray = numElements * sizeof(float);
-
-			const int BlockSizeAll = GPUspecs[0];
-			//originally 512
-			int GridSizeKernel = (numElements + BlockSizeAll - 1) / BlockSizeAll;
-
-
 			float* d_kernelPhase;
-			cudaMalloc((void**)&d_kernelPhase, mem2darray);
-
 			float *d_imgProperties;
-			size_t sizePrp = 4 * sizeof(float);
+			cudaMalloc((void**)&d_kernelPhase, mem2Darray);
 			cudaMalloc((void**)&d_imgProperties, sizePrp);
 			cudaMemcpy(d_imgProperties, imgProperties, sizePrp, cudaMemcpyHostToDevice);
 
-			makeKernel_nonefftshift << <GridSizeKernel, BlockSizeAll, 0, 0 >> >(d_kernelPhase, row, column, d_imgProperties);
+			makeKernel_nonefftshift <<<GridSizeKernel, BlockSizeAll, 0, 0 >> >(d_kernelPhase, row, column, d_imgProperties);
 
 			float* d_bfpMag;
 			float* d_bfpPhase;
-			cudaMalloc((void**)&d_bfpMag, mem2darray);
-			cudaMalloc((void**)&d_bfpPhase, mem2darray);
-
-			cudaMemcpy(d_bfpMag, h_bfpMag, mem2darray, cudaMemcpyHostToDevice);
-			cudaMemcpy(d_bfpPhase, h_bfpPhase, mem2darray, cudaMemcpyHostToDevice);
+			cudaMalloc((void**)&d_bfpMag, mem2Darray);
+			cudaMalloc((void**)&d_bfpPhase, mem2Darray);
+			cudaMemcpy(d_bfpMag, h_bfpMag, mem2Darray, cudaMemcpyHostToDevice);
+			cudaMemcpy(d_bfpPhase, h_bfpPhase, mem2Darray, cudaMemcpyHostToDevice);
 
 			float *d_zscale;
-			size_t memzsize = zrange * sizeof(float);
-			cudaMalloc((void**)&d_zscale, memzsize);
-			cudaMemcpy(d_zscale, zscale, memzsize, cudaMemcpyHostToDevice);
+			cudaMalloc((void**)&d_zscale, memZsize);
+			cudaMemcpy(d_zscale, zscale, memZsize, cudaMemcpyHostToDevice);
 
 			//preallocate space for 3D array, this will be a bit costly but lets go ahead with it
 			cufftComplex *d_3DiFFT;
-			int size3Darray = row*column*zrange;
-			size_t mem3dsize = size3Darray * sizeof(cufftComplex);
-			cudaMalloc((void**)&d_3DiFFT, mem3dsize);
+			cudaMalloc((void**)&d_3DiFFT, mem3Dsize);
 
 			//Execute Kernels
-			int GridSizeTransfer = (numElements*zrange / 16 + BlockSizeAll - 1) / BlockSizeAll;
 			TransferFunction << <GridSizeTransfer, BlockSizeAll, 0, 0 >> > (d_3DiFFT, d_bfpMag, d_bfpPhase, d_kernelPhase, d_zscale, size3Darray, numElements);
+			
+			//deallocate CUDA memory
+			cudaFree(d_bfpMag);
+			cudaFree(d_bfpPhase);
+			cudaFree(d_zscale);
+			cudaFree(d_imgProperties);
+			cudaFree(d_kernelPhase);
+
 
 			//Allocate cuda memory for 3D FFT
 			float* d_ImgOutMag;
-			size_t mem3dfloat = size3Darray * sizeof(float);
-			cudaMalloc((void**)&d_ImgOutMag, mem3dfloat);
+			cudaMalloc((void**)&d_ImgOutMag, mem3Darray);
 
 
 			/////////////////////////////////////////////////////////////////////////////////////////
@@ -770,17 +777,14 @@ void ReturnMagnitudeZStack(float* h_bfpMag, float* h_bfpPhase,
 			Cmplx2Mag << <GridSizeTransfer, BlockSizeAll, 0, 0 >> > (d_3DiFFT, d_ImgOutMag, size3Darray, numElements);
 
 			//Copy device memory to hosts
-			cudaMemcpy(h_ImgOutMag, d_ImgOutMag, mem3dfloat, cudaMemcpyDeviceToHost);
+			cudaMemcpy(h_ImgOutMag, d_ImgOutMag, mem3Darray, cudaMemcpyDeviceToHost);
 
 
 			//deallocate CUDA memory
 
-			cudaFree(d_bfpMag);
-			cudaFree(d_bfpPhase);
-			cudaFree(d_kernelPhase);
+		
+			
 			cudaFree(d_3DiFFT);
-			cudaFree(d_zscale);
-			cudaFree(d_imgProperties);
 			cudaFree(d_ImgOutMag);
 
 		}

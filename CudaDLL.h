@@ -31,6 +31,8 @@ extern "C" {
 //Main functions that operate on holograms
 /////////////
 
+__declspec(dllexport) void __cdecl	ReturnMagnitudeZStack2(float* h_bfpMag, float* h_bfpPhase,
+		float* h_ImgOutMag, float* zscale, int* arraySize, float* imgProperties, int* GPUspecs);
 
 __declspec(dllexport) float __cdecl lap(int dim, float* assigncost,
 		int* rowsol, int* colsol, float* u, float* v);
