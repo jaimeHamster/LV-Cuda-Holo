@@ -685,7 +685,7 @@ void ReturnMagnitudeZStack2(float* h_bfpMag, float* h_bfpPhase,
 						
 
 			//Declare all constants regarding Kernel execution sizes
-			const int BlockSizeAll = 512; //GPUspecs[0];
+			const int BlockSizeAll = GPUspecs[0];
 			const int GridSizeKernel = (numElements + BlockSizeAll - 1) / BlockSizeAll;
 			const int GridSizeTransfer = (size3Darray / 16 + BlockSizeAll - 1) / BlockSizeAll;
 
