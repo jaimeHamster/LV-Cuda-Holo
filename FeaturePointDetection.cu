@@ -112,6 +112,9 @@ __global__ void SumImage(float* img2Darray, float* sumimg, int row, int column)
 
 
 
+const int TILE_DIM = 32;
+const int BLOCK_ROWS = 8;
+const int NUM_REPS = 100;
 
 int main(int argc, char **argv)
 {
@@ -273,3 +276,66 @@ error_exit:
 	free(gold);
 }
 
+inline __device__
+void PrefixSum(Tout* output, Tin* input, int w, int nextpow2)
+{
+	SharedMemory<Tout> shared;
+	Tout* temp = shared.getPointer();
+
+	const int tdx = threadIdx.x;
+	int offset = 1;
+	const int tdx2 = 2 * tdx;
+	const int tdx2p = tdx2 + 1;
+
+	temp[tdx2] = tdx2 < w ? input[tdx2] : 0;
+	temp[tdx2p] = tdx2p < w ? input[tdx2p] : 0;
+
+	for (int d = nextpow2 >> 1; d > 0; d >>= 1) {
+		__syncthreads();
+		if (tdx < d)
+		{
+			int ai = offset * (tdx2p)-1;
+			int bi = offset * (tdx2 + 2) - 1;
+			temp[bi] += temp[ai];
+		}
+		offset *= 2;
+	}
+
+	if (tdx == 0) temp[nextpow2 - 1] = 0;
+
+	for (int d = 1; d < nextpow2; d *= 2) {
+		offset >>= 1;
+
+		__syncthreads();
+
+		if (tdx < d)
+		{
+			int ai = offset * (tdx2p)-1;
+			int bi = offset * (tdx2 + 2) - 1;
+			Tout t = temp[ai];
+			temp[ai] = temp[bi];
+			temp[bi] += t;
+		}
+	}
+
+	__syncthreads();
+
+	if (tdx2 < w)  output[tdx2] = temp[tdx2];
+	if (tdx2p < w) output[tdx2p] = temp[tdx2p];
+}
+
+template<typename Tout, typename Tin>
+__global__ void KernPrefixSumRows(Image<Tout> out, Image<Tin> in)
+{
+	const int row = blockIdx.y;
+	PrefixSum<Tout, Tin>(out.RowPtr(row), in.RowPtr(row), in.w, 2 * blockDim.x);
+}
+
+template<typename Tout, typename Tin>
+void PrefixSumRows(Image<Tout> out, Image<Tin> in)
+{
+	dim3 blockDim = dim3(1, 1);
+	while (blockDim.x < ceil(in.w / 2.0f)) blockDim.x <<= 1;
+	const dim3 gridDim = dim3(1, in.h);
+	KernPrefixSumRows << <gridDim, blockDim, 2 * sizeof(Tout)*blockDim.x >> > (out, in);
+}
