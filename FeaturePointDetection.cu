@@ -9,42 +9,11 @@
 #include <device_functions.h>
 #include <math.h>
 #include <float.h>
+#include <assert.h>
 
-
-__global__ void transposeNaive(float *odata, const float *idata)
-{
-	int x = blockIdx.x * TILE_DIM + threadIdx.x;
-	int y = blockIdx.y * TILE_DIM + threadIdx.y;
-	int width = gridDim.x * TILE_DIM;
-
-	for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS)
-		odata[x*width + (y + j)] = idata[(y + j)*width + x];
-}
-
-
-
-// coalesced transpose
-// Uses shared memory to achieve coalesing in both reads and writes
-// Tile width == #banks causes shared memory bank conflicts.
-__global__ void transposeCoalesced(float *odata, const float *idata)
-{
-	__shared__ float tile[TILE_DIM][TILE_DIM];
-
-	int x = blockIdx.x * TILE_DIM + threadIdx.x;
-	int y = blockIdx.y * TILE_DIM + threadIdx.y;
-	int width = gridDim.x * TILE_DIM;
-
-	for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS)
-		tile[threadIdx.y + j][threadIdx.x] = idata[(y + j)*width + x];
-
-	__syncthreads();
-
-	x = blockIdx.y * TILE_DIM + threadIdx.x;  // transpose block offset
-	y = blockIdx.x * TILE_DIM + threadIdx.y;
-
-	for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS)
-		odata[(y + j)*width + x] = tile[threadIdx.x][threadIdx.y + j];
-}
+//Just some definitions, will probably move it to the header files
+const int TILE_DIM = 32;
+const int BLOCK_ROWS = 8;
 
 
 // No bank-conflict transpose
@@ -71,11 +40,32 @@ __global__ void transposeNoBankConflicts(float *odata, const float *idata)
 }
 
 
+__global__ void transposeNoBankConflicts2(float *odata, float *idata, int row, int column)
+{
+	__shared__ float tile[TILE_DIM][TILE_DIM + 1];
+
+	int xIdx = blockIdx.x * TILE_DIM + threadIdx.x;
+	int yIdx = blockIdx.y * TILE_DIM + threadIdx.y;
+	
+	if ((xIdx < row) && (yIdx < column)) {
+		tile[threadIdx.y][threadIdx.x] = idata[(yIdx *row + xIdx];
+	}
+
+	__syncthreads();
+
+	xIdx = blockIdx.y * TILE_DIM + threadIdx.x;  // transpose block offset
+	yIdx = blockIdx.x * TILE_DIM + threadIdx.y;
+
+	if ((xIdx < row) && (yIdx < column)) {
+		odata[yIdx *column + xIdx] = tile[threadIdx.x][threadIdx.y];
+	}
+}
+
 __global__ void KernTranspose(float* img_out, float* img_in, int row, int column)
 {
-	__shared__ Tin temp[BLOCK_DIM][BLOCK_DIM + 1];
-	int xIndex = blockIdx.x*BLOCK_DIM + threadIdx.x;
-	int yIndex = blockIdx.y*BLOCK_DIM + threadIdx.y;
+	__shared__ float temp[TILE_DIM][TILE_DIM + 1];
+	int xIndex = blockIdx.x*TILE_DIM + threadIdx.x;
+	int yIndex = blockIdx.y*TILE_DIM + threadIdx.y;
 
 	if ((xIndex < row) && (yIndex < column)) {
 		temp[threadIdx.y][threadIdx.x] = in(xIndex, yIndex);
@@ -83,10 +73,10 @@ __global__ void KernTranspose(float* img_out, float* img_in, int row, int column
 
 	__syncthreads();
 
-	xIndex = blockIdx.y * BLOCK_DIM + threadIdx.x;
-	yIndex = blockIdx.x * BLOCK_DIM + threadIdx.y;
+	xIndex = blockIdx.y * TILE_DIM + threadIdx.x;
+	yIndex = blockIdx.x * TILE_DIM + threadIdx.y;
 
-	if ((xIndex < in.h) && (yIndex < in.w)) {
+	if ((xIndex < row ) && (yIndex < column)) {
 		out(xIndex, yIndex) = temp[threadIdx.x][threadIdx.y];
 	}
 }
