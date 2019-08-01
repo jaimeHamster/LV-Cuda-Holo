@@ -11,6 +11,76 @@
 #include <float.h>
 
 
+// cuda code Transpose Kernel for GPU from Bilgic 2010
+// Same as transposeCoalesced except the first tile dimension is padded 
+// to avoid shared memory bank conflicts.
+__global__ void transpose(float *input, float
+	*output, int width, int height)
+{
+	__shared__ float temp[BLOCK_DIM][BLOCK_DIM + 1];
+	int xIndex = blockIdx.x*BLOCK_DIM + threadIdx.x;
+	int yIndex = blockIdx.y*BLOCK_DIM + threadIdx.y;
+	if ((xIndex < width) && (yIndex < height))
+	{
+		int id_in = yIndex * width + xIndex;
+		temp[threadIdx.y][threadIdx.x] = input[id_in];
+	}
+	__syncthreads();
+	xIndex = blockIdx.y * BLOCK_DIM + threadIdx.x;
+	yIndex = blockIdx.x * BLOCK_DIM + threadIdx.y;
+	if ((xIndex < height) && (yIndex < width))
+	{
+		int id_out = yIndex * height + xIndex;
+		output[id_out] = temp[threadIdx.x][threadIdx.y];
+	}
+}
+
+///cuda code for prefix sum from Bilgic 2010
+// this is an exclusive implementation, so it is BS
+// cannot deal with scan array sizes greater than 1024 as the max number of threads per block is 512
+__global__ void scan(float *input, float
+	*output, int n)
+{
+	extern __shared__ float temp[];
+	int tdx = threadIdx.x; int offset = 1;
+	temp[2 * tdx] = input[2 * tdx];
+	temp[2 * tdx + 1] = input[2 * tdx + 1];
+	for (int d = n >> 1; d > 0; d >>= 1)
+	{
+		__syncthreads();
+		if (tdx < d)
+		{
+			int ai = offset * (2 * tdx + 1) - 1;
+			int bi = offset * (2 * tdx + 2) - 1;
+			temp[bi] += temp[ai];
+		}
+		offset *= 2;
+	}
+	if (tdx == 0) temp[n - 1] = 0;
+	for (int d = 1; d < n; d *= 2)
+	{
+		offset >>= 1; __syncthreads();
+		if (tdx < d)
+		{
+			int ai = offset * (2 * tdx + 1) - 1;
+			int bi = offset * (2 * tdx + 2) - 1;
+			float t = temp[ai];
+			temp[ai] = temp[bi];
+			temp[bi] += t;
+		}
+	}
+	__syncthreads();
+	output[2 * tdx] = temp[2 * tdx];
+	output[2 * tdx + 1] = temp[2 * tdx + 1];
+}
+
+
+//Can extend to bigger arrays by using several thread blocks and making them responsible for a certain part of the input.If we let the input 
+//array contain n elements and if each block processes b of the
+//entries, we need to launch n / b thread blocks and b / 2 threads
+//in each block.
+
+
 __global__ void transposeNaive(float *odata, const float *idata)
 {
 	int x = blockIdx.x * TILE_DIM + threadIdx.x;
@@ -112,10 +182,81 @@ __global__ void SumImage(float* img2Darray, float* sumimg, int row, int column)
 
 
 
+//seems like the same integral image as before
+inline __device__
+void PrefixSum(Tout* output, Tin* input, int w, int nextpow2)
+{
+	SharedMemory<Tout> shared;
+	Tout* temp = shared.getPointer();
+
+	const int tdx = threadIdx.x;
+	int offset = 1;
+	const int tdx2 = 2 * tdx;
+	const int tdx2p = tdx2 + 1;
+
+	temp[tdx2] = tdx2 < w ? input[tdx2] : 0;
+	temp[tdx2p] = tdx2p < w ? input[tdx2p] : 0;
+
+	for (int d = nextpow2 >> 1; d > 0; d >>= 1) {
+		__syncthreads();
+		if (tdx < d)
+		{
+			int ai = offset * (tdx2p)-1;
+			int bi = offset * (tdx2 + 2) - 1;
+			temp[bi] += temp[ai];
+		}
+		offset *= 2;
+	}
+
+	if (tdx == 0) temp[nextpow2 - 1] = 0;
+
+	for (int d = 1; d < nextpow2; d *= 2) {
+		offset >>= 1;
+
+		__syncthreads();
+
+		if (tdx < d)
+		{
+			int ai = offset * (tdx2p)-1;
+			int bi = offset * (tdx2 + 2) - 1;
+			Tout t = temp[ai];
+			temp[ai] = temp[bi];
+			temp[bi] += t;
+		}
+	}
+
+	__syncthreads();
+
+	if (tdx2 < w)  output[tdx2] = temp[tdx2];
+	if (tdx2p < w) output[tdx2p] = temp[tdx2p];
+}
+
+template<typename Tout, typename Tin>
+__global__ void KernPrefixSumRows(Image<Tout> out, Image<Tin> in)
+{
+	const int row = blockIdx.y;
+	PrefixSum<Tout, Tin>(out.RowPtr(row), in.RowPtr(row), in.w, 2 * blockDim.x);
+}
+
+template<typename Tout, typename Tin>
+void PrefixSumRows(Image<Tout> out, Image<Tin> in)
+{
+	dim3 blockDim = dim3(1, 1);
+	while (blockDim.x < ceil(in.w / 2.0f)) blockDim.x <<= 1;
+	const dim3 gridDim = dim3(1, in.h);
+	KernPrefixSumRows << <gridDim, blockDim, 2 * sizeof(Tout)*blockDim.x >> > (out, in);
+}
+
+
+
+
+
+
+
 const int TILE_DIM = 32;
 const int BLOCK_ROWS = 8;
 const int NUM_REPS = 100;
-
+//TRANSPOSE STUFF
 int main(int argc, char **argv)
 {
 	const int nx = 1024;
@@ -274,68 +415,4 @@ error_exit:
 	free(h_tdata);
 	free(h_cdata);
 	free(gold);
-}
-
-inline __device__
-void PrefixSum(Tout* output, Tin* input, int w, int nextpow2)
-{
-	SharedMemory<Tout> shared;
-	Tout* temp = shared.getPointer();
-
-	const int tdx = threadIdx.x;
-	int offset = 1;
-	const int tdx2 = 2 * tdx;
-	const int tdx2p = tdx2 + 1;
-
-	temp[tdx2] = tdx2 < w ? input[tdx2] : 0;
-	temp[tdx2p] = tdx2p < w ? input[tdx2p] : 0;
-
-	for (int d = nextpow2 >> 1; d > 0; d >>= 1) {
-		__syncthreads();
-		if (tdx < d)
-		{
-			int ai = offset * (tdx2p)-1;
-			int bi = offset * (tdx2 + 2) - 1;
-			temp[bi] += temp[ai];
-		}
-		offset *= 2;
-	}
-
-	if (tdx == 0) temp[nextpow2 - 1] = 0;
-
-	for (int d = 1; d < nextpow2; d *= 2) {
-		offset >>= 1;
-
-		__syncthreads();
-
-		if (tdx < d)
-		{
-			int ai = offset * (tdx2p)-1;
-			int bi = offset * (tdx2 + 2) - 1;
-			Tout t = temp[ai];
-			temp[ai] = temp[bi];
-			temp[bi] += t;
-		}
-	}
-
-	__syncthreads();
-
-	if (tdx2 < w)  output[tdx2] = temp[tdx2];
-	if (tdx2p < w) output[tdx2p] = temp[tdx2p];
-}
-
-template<typename Tout, typename Tin>
-__global__ void KernPrefixSumRows(Image<Tout> out, Image<Tin> in)
-{
-	const int row = blockIdx.y;
-	PrefixSum<Tout, Tin>(out.RowPtr(row), in.RowPtr(row), in.w, 2 * blockDim.x);
-}
-
-template<typename Tout, typename Tin>
-void PrefixSumRows(Image<Tout> out, Image<Tin> in)
-{
-	dim3 blockDim = dim3(1, 1);
-	while (blockDim.x < ceil(in.w / 2.0f)) blockDim.x <<= 1;
-	const dim3 gridDim = dim3(1, in.h);
-	KernPrefixSumRows << <gridDim, blockDim, 2 * sizeof(Tout)*blockDim.x >> > (out, in);
 }

@@ -26,6 +26,9 @@
     <CudaCompile Include="FeaturePointDetection.cu">
       <Filter>Source Files</Filter>
     </CudaCompile>
+    <CudaCompile Include="HaarLikeCalculation.cu">
+      <Filter>Source Files</Filter>
+    </CudaCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CudaDLL.h">
